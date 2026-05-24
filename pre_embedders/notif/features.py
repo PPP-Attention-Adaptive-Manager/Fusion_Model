@@ -1,10 +1,14 @@
+import os
 import sqlite3
 import time
 import math
 import numpy as np
 
 WINDOW_SECONDS = 60
-DB_PATH = "data/notif_log.db"
+DB_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "data", "notif_log.db"
+)
 
 
 def fetch_window():

@@ -5,10 +5,9 @@ from model import load_model, get_embedding, normalize_features
 # Replace these values with the scaler parameters printed
 # by Cell 8 of the Colab notebook after training
 SCALER_PARAMS = {
-    "min_": [0.0, 0.0, 0.0, 0.0, 0.0],
-    "max_": [1.0, 1.0, 1.0, 1.0, 1.0],
+    'min_': [0.0, 0.0, 0.0, 0.0, 0.0], 
+    'max_': [3.0, 2.509182763787976e-07, 1.0, 0.021615064589633373, 1.0]
 }
-
 
 def compute_state(npi):
     if npi < 0.20:
@@ -25,7 +24,13 @@ def compute_state(npi):
 
 def get_output(session):
     raw_features = extract_features()
-    npi = compute_npi(raw_features)
+    npi = compute_npi(
+        float(raw_features[0]),
+        float(raw_features[1]),
+        float(raw_features[2]),
+        float(raw_features[3]),
+        float(raw_features[4]),
+    )
     state = compute_state(npi)
     normalized_features = normalize_features(raw_features, SCALER_PARAMS)
     embedding = get_embedding(session, normalized_features)
