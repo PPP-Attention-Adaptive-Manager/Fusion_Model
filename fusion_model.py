@@ -3,11 +3,8 @@ AAM Inférer — Fusion Model (orchestrator)
 ==========================================
 Wires together: TFN → 4 model slots → PoE → EMA → final output.
 
-Active model per modality is controlled by its __init__.py:
-    fusion/models/mouse/__init__.py      ← change import here to swap mouse model
-    fusion/models/keyboard/__init__.py
-    fusion/models/notif/__init__.py
-    fusion/models/gnn/__init__.py
+Active TFN implementation controlled by TFN/__init__.py (Tucker default).
+Active model per modality controlled by predictive_models/{modality}/__init__.py.
 
 Output contract
 ---------------
@@ -19,7 +16,7 @@ Output contract
 
   "per_model": [(B, 12)] × 4
       dims 0-4  : factor scores
-      dims 5-9  : state logits
+      dims 5-9  : state logits  (RAW — no softmax)
       dim  10   : H_norm
       dim  11   : M
 }
@@ -29,19 +26,20 @@ from typing import Dict, List
 import torch
 import torch.nn as nn
 
-from TFN.tfn import TFNLayer
-from poe.poe import PoEFusion
-from ema.ema import EMAsmoother, compute_uncertainty
-from predictive_models import MODALITY_MODELS
+from TFN                import ActiveTFN
+from poe.poe            import PoEFusion
+from ema.ema            import EMAsmoother, compute_uncertainty
+from predictive_models  import MODALITY_MODELS
 
 
 class InferrerFusion(nn.Module):
 
-    MODALITY_NAMES = ["mouse", "keyboard", "notif", "gnn"]
+    MODALITY_NAMES = ["mouse", "keyboard", "notif", "switching"]
 
     def __init__(
         self,
-        d_dims    : List[int],
+        d_dims    : List[int] = [64, 64, 32, 32],
+        rank      : int   = 8,
         d_proj    : int   = 256,
         poe_mode  : str   = "vanilla",
         ema_alpha : float = 0.7,
@@ -50,7 +48,7 @@ class InferrerFusion(nn.Module):
         assert len(d_dims) == 4
 
         self.d_dims = d_dims
-        self.tfn    = TFNLayer(d_dims)
+        self.tfn    = ActiveTFN(d_dims=d_dims, rank=rank)
 
         self.models = nn.ModuleList([
             MODALITY_MODELS[i](
@@ -83,7 +81,7 @@ class InferrerFusion(nn.Module):
     def forward(self, embeddings: List[torch.Tensor]) -> Dict[str, object]:
         """
         Args:
-            embeddings: [h_mouse, h_kb, h_notif, h_gnn], each (B, d_m)
+            embeddings: [h_mouse, h_kb, h_notif, h_switching], each (B, d_m)
         Returns:
             {"global": (B,11), "per_model": [(B,12)] x 4}
         """
