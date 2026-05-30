@@ -29,7 +29,7 @@ class MouseBufferedEncoder:
         d_out : expected embedding dimension (default 128, must match MouseEncoderP2)
     """
 
-    def __init__(self, d_out: int = 128) -> None:
+    def __init__(self, d_out: int = 64) -> None:
         self.d_out = d_out
 
     def step(self, raw_input: torch.Tensor) -> Tuple[torch.Tensor, float]:
