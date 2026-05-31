@@ -453,7 +453,7 @@ cd fusion_model/
 python test_fusion.py
 ```
 
-All 6 tests must pass. If they do, your model is correctly integrated.
+The smoke tests must pass. If they do, your model is correctly integrated.
 
 ---
 
@@ -668,7 +668,7 @@ It does not replace or modify the main predictive model. It is an additional tra
 □ Dims 10–11 computed via compute_uncertainty() from ema.ema
 □ reset_microstate() clears all hidden state (GRU/LSTM h, c)
 □ __init__.py in your modality folder updated to point at your model
-□ test_fusion.py passes all 6 tests
+□ test_fusion.py passes
 □ Smoke tested with d_dims=[64, 64, 32, 64], rank=8
 ```
 

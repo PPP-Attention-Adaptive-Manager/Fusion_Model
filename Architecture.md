@@ -4,9 +4,9 @@ Ce document decrit l'architecture complete du fusion model, le pipeline runtime,
 et les contrats input/output de chaque composant.
 
 Note d'etat du code: `fusion_model.py` utilise `ActiveTFN` depuis `TFN/__init__.py`,
-donc l'implementation active par defaut est `LowRankTuckerFusion`. Le fichier
-`predictive_models/__init__.py` doit exposer `MODALITY_MODELS` pour que
-`InferrerFusion` puisse instancier les 4 modeles actifs.
+donc l'implementation active par defaut est `LowRankTuckerFusion`.
+`predictive_models/__init__.py` expose `MODALITY_MODELS` dans l'ordre
+`mouse`, `keyboard`, `notif`, `switching`.
 
 ## Vue globale
 

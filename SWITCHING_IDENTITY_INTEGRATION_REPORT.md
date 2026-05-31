@@ -153,13 +153,13 @@ python -c "from TCN_encoders.switching.encoder import SwitchingBufferedEncoder; 
 SwitchingIdentityEncoder 64
 ```
 
-Not run:
+Passed:
 
 ```text
 python test_fusion.py
+Ran 5 tests
+OK
 ```
-
-Reason: `test_fusion.py` is not present in the project root.
 
 Runtime note: PyTorch Geometric emitted a deprecation warning for
 `torch_geometric.distributed`; this did not affect the tests.
