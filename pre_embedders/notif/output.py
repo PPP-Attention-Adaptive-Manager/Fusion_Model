@@ -1,6 +1,6 @@
 import numpy as np
-from features import extract_features, compute_npi
-from model import load_model, get_embedding, normalize_features
+from .features import extract_features, compute_npi
+from .model    import load_model, get_embedding, normalize_features
 
 # Replace these values with the scaler parameters printed
 # by Cell 8 of the Colab notebook after training

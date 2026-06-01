@@ -1,0 +1,1 @@
+# GNN teammate module — placeholder until delivery
