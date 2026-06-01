@@ -9,4 +9,5 @@ build/
 venv/
 pre_embedders/notif/data/
 data/
+data_training/
 outputs/
