@@ -11,7 +11,7 @@ Output contract
 {
   "global"   : (B, 11)
       [mental_demand, temporal_demand, effort, frustration, arousal,
-       p_Flow, p_Neutral, p_Bored, p_Distracted, p_Overloaded,
+       logit_Flow, logit_Neutral, logit_Bored, logit_Distracted, logit_Overloaded,
        H_norm_ensemble]
 
   "per_model": [(B, 12)] × 4
@@ -104,11 +104,14 @@ class InferrerFusion(nn.Module):
             [out[:, :5] for out in per_model_outputs], dim=0
         ).mean(dim=0)
 
-        H_ens, _ = compute_uncertainty(torch.log(p_final + 1e-8))
+        # Use log-probabilities as CE-ready state logits for the training
+        # contract while keeping PoE+EMA probability smoothing internally.
+        state_logits = torch.log(p_final + 1e-8)
+        H_ens, _ = compute_uncertainty(state_logits)
 
         global_out = torch.cat([
             factors,
-            p_final,
+            state_logits,
             H_ens.unsqueeze(-1),
         ], dim=-1)
 

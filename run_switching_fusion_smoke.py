@@ -129,7 +129,8 @@ def main() -> None:
         "switching_metadata": metadata,
         "fusion_global_shape": tuple(output["global"].shape),
         "fusion_per_model_shapes": [tuple(t.shape) for t in output["per_model"]],
-        "fusion_state_probs": output["global"][0, 5:10],
+        "fusion_state_logits": output["global"][0, 5:10],
+        "fusion_state_probs": torch.softmax(output["global"][0, 5:10], dim=-1),
         "debug": output.get("debug", {}),
         "note": "Mouse/keyboard/notif embeddings are zero dummies; predictive models are smoke-test baselines except existing notif.",
     }
@@ -139,4 +140,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

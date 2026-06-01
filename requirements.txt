@@ -1,0 +1,28 @@
+# Core numeric/runtime dependencies
+numpy==1.26.4
+scipy==1.17.1
+pandas==3.0.1
+
+# PyTorch stack used by TFN, predictive models, TCN encoders, and GraphSAGE export.
+# The local machine currently has torch 2.5.1+cu121 installed.
+# If CUDA wheels are needed, install torch from the official PyTorch index first,
+# then install the rest of this file.
+torch==2.5.1
+torch-geometric==2.7.0
+
+# Notification ONNX embedder
+onnxruntime==1.26.0
+
+# Training/evaluation utilities
+tqdm==4.67.3
+matplotlib==3.10.8
+scikit-learn==1.8.0
+
+# Notebook inspection
+jupyter==1.1.1
+notebook==7.5.5
+ipykernel==6.29.5
+
+# Optional Windows live notification listener dependency.
+# The offline fusion/training scripts do not require it.
+# winsdk
