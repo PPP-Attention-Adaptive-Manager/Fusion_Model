@@ -1,5 +1,9 @@
 from .fixed_tcn         import FixedTCNEncoder
-from .configs           import TCNEncoderConfig, multiscale, narrow, shallow, wide
+from .configs           import (
+    TCNEncoderConfig,
+    multiscale, narrow, wide, shallow,
+    shallow_notif, shallow_switching,
+)
 from .mouse.encoder     import MouseBufferedEncoder
 from .keyboard.encoder  import KeyboardBufferedEncoder
 from .notif.encoder     import NotifBufferedEncoder
@@ -14,6 +18,7 @@ MODALITY_ENCODERS = [
 
 __all__ = [
     "FixedTCNEncoder", "TCNEncoderConfig",
-    "multiscale", "narrow", "shallow", "wide",
+    "multiscale", "narrow", "wide", "shallow",
+    "shallow_notif", "shallow_switching",
     "MODALITY_ENCODERS",
 ]
