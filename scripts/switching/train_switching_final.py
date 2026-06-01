@@ -28,11 +28,13 @@ import torch
 from predictive_models.switching.v1_gru_switching import SwitchingGRU
 from scripts.switching.train_switching_predictive import (
     INPUT_FLAT_DIM,
-    compute_loss,
+    compute_class_weights,
     load_training_arrays,
     make_loader,
+    num_states_for_mode,
     prepare_targets,
     run_epoch,
+    state_names_for_mode,
     users_from_metadata,
 )
 
@@ -89,6 +91,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/switching_predictive/final"))
     parser.add_argument("--d-proj", type=int, default=256)
     parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--state-mode", choices=["5class", "3class"], default="5class")
+    parser.add_argument("--class-weights", choices=["none", "balanced"], default="none")
+    parser.add_argument("--state-loss", choices=["ce", "focal"], default="ce")
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
+    parser.add_argument(
+        "--task",
+        choices=["joint", "regression_only", "classification_only"],
+        default="joint",
+    )
     return parser.parse_args()
 
 
@@ -99,7 +110,9 @@ def main() -> None:
     device = torch.device(args.device if args.device != "cuda" or torch.cuda.is_available() else "cpu")
 
     X, labels, metadata, resolved_dir = load_training_arrays(args.data_dir)
-    factors, states = prepare_targets(labels)
+    factors, states = prepare_targets(labels, state_mode=args.state_mode)
+    num_states = num_states_for_mode(args.state_mode)
+    state_names = state_names_for_mode(args.state_mode)
     users = users_from_metadata(metadata)
     train_idx, val_idx, train_users, val_users = _user_level_train_val(users, args.val_ratio, args.seed)
 
@@ -108,8 +121,19 @@ def main() -> None:
     X_val = _normalize(X[val_idx], mean_train, std_train)
     train_loader = make_loader(X_train, factors[train_idx], states[train_idx], batch_size=args.batch_size, shuffle=True)
     val_loader = make_loader(X_val, factors[val_idx], states[val_idx], batch_size=args.batch_size, shuffle=False)
+    class_weight_np = compute_class_weights(states[train_idx], num_states, args.class_weights)
+    class_weight_tensor = (
+        torch.from_numpy(class_weight_np).to(device)
+        if class_weight_np is not None
+        else None
+    )
 
-    model = SwitchingGRU(input_flat_dim=INPUT_FLAT_DIM, d_proj=args.d_proj, hidden_dim=args.hidden_dim).to(device)
+    model = SwitchingGRU(
+        input_flat_dim=INPUT_FLAT_DIM,
+        d_proj=args.d_proj,
+        hidden_dim=args.hidden_dim,
+        num_states=num_states,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_val = float("inf")
@@ -117,8 +141,28 @@ def main() -> None:
     patience_left = args.patience
     validation_history: List[Dict[str, Any]] = []
     for epoch in range(1, args.epochs + 1):
-        train_metrics = run_epoch(model, train_loader, device=device, optimizer=optimizer)
-        val_metrics = run_epoch(model, val_loader, device=device, optimizer=None)
+        train_metrics = run_epoch(
+            model,
+            train_loader,
+            device=device,
+            optimizer=optimizer,
+            num_states=num_states,
+            class_weights=class_weight_tensor,
+            state_loss=args.state_loss,
+            task=args.task,
+            focal_gamma=args.focal_gamma,
+        )
+        val_metrics = run_epoch(
+            model,
+            val_loader,
+            device=device,
+            optimizer=None,
+            num_states=num_states,
+            class_weights=class_weight_tensor,
+            state_loss=args.state_loss,
+            task=args.task,
+            focal_gamma=args.focal_gamma,
+        )
         row = {
             "epoch": epoch,
             **{f"train_{k}": v for k, v in train_metrics.items()},
@@ -138,11 +182,32 @@ def main() -> None:
     mean_all, std_all = _fit_normalizer(X)
     X_all = _normalize(X, mean_all, std_all)
     all_loader = make_loader(X_all, factors, states, batch_size=args.batch_size, shuffle=True)
-    final_model = SwitchingGRU(input_flat_dim=INPUT_FLAT_DIM, d_proj=args.d_proj, hidden_dim=args.hidden_dim).to(device)
+    all_class_weight_np = compute_class_weights(states, num_states, args.class_weights)
+    all_class_weight_tensor = (
+        torch.from_numpy(all_class_weight_np).to(device)
+        if all_class_weight_np is not None
+        else None
+    )
+    final_model = SwitchingGRU(
+        input_flat_dim=INPUT_FLAT_DIM,
+        d_proj=args.d_proj,
+        hidden_dim=args.hidden_dim,
+        num_states=num_states,
+    ).to(device)
     final_optimizer = torch.optim.AdamW(final_model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     refit_history: List[Dict[str, Any]] = []
     for epoch in range(1, best_epoch + 1):
-        metrics = run_epoch(final_model, all_loader, device=device, optimizer=final_optimizer)
+        metrics = run_epoch(
+            final_model,
+            all_loader,
+            device=device,
+            optimizer=final_optimizer,
+            num_states=num_states,
+            class_weights=all_class_weight_tensor,
+            state_loss=args.state_loss,
+            task=args.task,
+            focal_gamma=args.focal_gamma,
+        )
         refit_history.append({"epoch": epoch, **metrics})
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +220,15 @@ def main() -> None:
             "input_flat_dim": INPUT_FLAT_DIM,
             "d_proj": args.d_proj,
             "hidden_dim": args.hidden_dim,
+            "state_names": state_names,
+            "state_mode": args.state_mode,
+            "num_states": num_states,
+            "class_weights": all_class_weight_np.tolist() if all_class_weight_np is not None else None,
+            "class_weight_mode": args.class_weights,
+            "state_loss": args.state_loss,
+            "focal_gamma": args.focal_gamma,
+            "task": args.task,
+            "experimental": args.state_mode != "5class" or args.task != "joint",
             "best_epoch_from_validation": best_epoch,
             "validation_loss": best_val,
             "trained_on_all_samples": True,
@@ -176,6 +250,13 @@ def main() -> None:
         "num_users": int(len(set(users.tolist()))),
         "best_epoch_from_validation": int(best_epoch),
         "validation_loss": float(best_val),
+        "state_mode": args.state_mode,
+        "state_names": state_names,
+        "num_states": num_states,
+        "class_weight_mode": args.class_weights,
+        "state_loss": args.state_loss,
+        "task": args.task,
+        "experimental": args.state_mode != "5class" or args.task != "joint",
         "trained_on_all_samples": True,
         "device": str(device),
     }

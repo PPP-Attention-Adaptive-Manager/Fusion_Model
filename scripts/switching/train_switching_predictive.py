@@ -34,7 +34,13 @@ from torch.utils.data import DataLoader, TensorDataset
 from predictive_models.switching.v1_gru_switching import SwitchingGRU
 
 
-STATE_NAMES = ["Flow", "Neutral", "Bored", "Distracted", "Overloaded"]
+STATE_NAMES_5CLASS = ["Flow", "Neutral", "Bored", "Distracted", "Overloaded"]
+STATE_NAMES_3CLASS = ["Low_Underloaded", "Neutral", "High_Strained"]
+STATE_NAMES = STATE_NAMES_5CLASS
+STATE_MODE_TO_NAMES = {
+    "5class": STATE_NAMES_5CLASS,
+    "3class": STATE_NAMES_3CLASS,
+}
 SWITCHING_MODALITY_INDEX = 3
 INPUT_FLAT_DIM = 512
 
@@ -63,6 +69,14 @@ def load_training_arrays(data_dir: str | Path) -> Tuple[np.ndarray, np.ndarray, 
     return slices[:, SWITCHING_MODALITY_INDEX, :], labels, metadata, root
 
 
+def state_names_for_mode(state_mode: str) -> List[str]:
+    return STATE_MODE_TO_NAMES[state_mode]
+
+
+def num_states_for_mode(state_mode: str) -> int:
+    return len(state_names_for_mode(state_mode))
+
+
 def derive_state_label(row: np.ndarray) -> int:
     md = float(row[0])
     td = float(row[2])
@@ -87,7 +101,15 @@ def derive_state_label(row: np.ndarray) -> int:
     return 1
 
 
-def prepare_targets(labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def map_5class_to_3class(states_5class: np.ndarray) -> np.ndarray:
+    mapped = np.empty_like(states_5class, dtype=np.int64)
+    mapped[np.isin(states_5class, [0, 2])] = 0
+    mapped[states_5class == 1] = 1
+    mapped[np.isin(states_5class, [3, 4])] = 2
+    return mapped
+
+
+def prepare_targets(labels: np.ndarray, state_mode: str = "5class") -> Tuple[np.ndarray, np.ndarray]:
     md = labels[:, 0]
     td = labels[:, 2]
     ef = labels[:, 4]
@@ -95,7 +117,14 @@ def prepare_targets(labels: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     ar = (td + ef) / 2.0
     factors = np.stack([md, td, ef, fr, ar], axis=1).astype(np.float32) / 100.0
     factors = np.clip(factors, 0.0, 1.0).astype(np.float32)
-    states = np.asarray([derive_state_label(row) for row in labels], dtype=np.int64)
+
+    states_5class = np.asarray([derive_state_label(row) for row in labels], dtype=np.int64)
+    if state_mode == "5class":
+        states = states_5class
+    elif state_mode == "3class":
+        states = map_5class_to_3class(states_5class)
+    else:
+        raise ValueError(f"Unsupported state_mode: {state_mode}")
     return factors, states
 
 
@@ -170,15 +199,84 @@ def make_loader(
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
+def compute_class_weights(states: np.ndarray, num_states: int, mode: str) -> np.ndarray | None:
+    if mode == "none":
+        return None
+    if mode != "balanced":
+        raise ValueError(f"Unsupported class weight mode: {mode}")
+    counts = np.bincount(states.astype(np.int64), minlength=num_states).astype(np.float32)
+    weights = np.zeros(num_states, dtype=np.float32)
+    nonzero = counts > 0
+    weights[nonzero] = float(states.shape[0]) / (float(num_states) * counts[nonzero])
+    return weights
+
+
+def focal_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    *,
+    class_weights: torch.Tensor | None = None,
+    gamma: float = 2.0,
+) -> torch.Tensor:
+    log_probs = F.log_softmax(logits, dim=-1)
+    log_pt = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+    pt = log_pt.exp()
+    if class_weights is None:
+        alpha_t = torch.ones_like(pt)
+    else:
+        alpha_t = class_weights.gather(0, targets)
+    loss = -alpha_t * torch.pow(1.0 - pt, gamma) * log_pt
+    return loss.mean()
+
+
 def compute_loss(
     output: torch.Tensor,
     factors_gt: torch.Tensor,
     states_gt: torch.Tensor,
+    *,
+    num_states: int = 5,
+    class_weights: torch.Tensor | None = None,
+    state_loss: str = "ce",
+    task: str = "joint",
+    focal_gamma: float = 2.0,
 ) -> Dict[str, torch.Tensor]:
-    factor_loss = F.huber_loss(output[:, :5], factors_gt)
-    state_loss = F.cross_entropy(output[:, 5:10], states_gt)
-    loss = 0.4 * factor_loss + 0.6 * state_loss
-    return {"loss": loss, "factor_loss": factor_loss.detach(), "state_loss": state_loss.detach()}
+    factor_pred = output[:, :5]
+    logits = output[:, 5 : 5 + num_states]
+
+    if task in ("joint", "regression_only"):
+        factor_loss = F.huber_loss(factor_pred, factors_gt)
+    else:
+        factor_loss = torch.zeros((), dtype=output.dtype, device=output.device)
+
+    if task in ("joint", "classification_only"):
+        if state_loss == "ce":
+            state_loss_tensor = F.cross_entropy(logits, states_gt, weight=class_weights)
+        elif state_loss == "focal":
+            state_loss_tensor = focal_loss(
+                logits,
+                states_gt,
+                class_weights=class_weights,
+                gamma=focal_gamma,
+            )
+        else:
+            raise ValueError(f"Unsupported state_loss: {state_loss}")
+    else:
+        state_loss_tensor = torch.zeros((), dtype=output.dtype, device=output.device)
+
+    if task == "joint":
+        loss = 0.4 * factor_loss + 0.6 * state_loss_tensor
+    elif task == "regression_only":
+        loss = factor_loss
+    elif task == "classification_only":
+        loss = state_loss_tensor
+    else:
+        raise ValueError(f"Unsupported task: {task}")
+
+    return {
+        "loss": loss,
+        "factor_loss": factor_loss.detach(),
+        "state_loss": state_loss_tensor.detach(),
+    }
 
 
 def _to_device(batch, device: torch.device):
@@ -187,15 +285,29 @@ def _to_device(batch, device: torch.device):
 
 
 def run_epoch(
-    model: SwitchingGRU,
+    model: torch.nn.Module,
     loader: DataLoader,
     *,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None = None,
+    num_states: int = 5,
+    class_weights: torch.Tensor | None = None,
+    state_loss: str = "ce",
+    task: str = "joint",
+    focal_gamma: float = 2.0,
 ) -> Dict[str, float]:
     training = optimizer is not None
     model.train(training)
-    totals = {"loss": 0.0, "factor_loss": 0.0, "state_loss": 0.0, "correct": 0.0, "count": 0.0}
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
+    totals = {
+        "loss": 0.0,
+        "factor_loss": 0.0,
+        "state_loss": 0.0,
+        "correct": 0.0,
+        "count": 0.0,
+        "factor_abs_error": 0.0,
+    }
 
     for batch in loader:
         x, factors, states = _to_device(batch, device)
@@ -204,7 +316,16 @@ def run_epoch(
             optimizer.zero_grad(set_to_none=True)
         with torch.set_grad_enabled(training):
             output = model(x)
-            losses = compute_loss(output, factors, states)
+            losses = compute_loss(
+                output,
+                factors,
+                states,
+                num_states=num_states,
+                class_weights=class_weights,
+                state_loss=state_loss,
+                task=task,
+                focal_gamma=focal_gamma,
+            )
             if training:
                 losses["loss"].backward()
                 optimizer.step()
@@ -214,7 +335,9 @@ def run_epoch(
         totals["loss"] += float(losses["loss"].detach().item()) * n
         totals["factor_loss"] += float(losses["factor_loss"].item()) * n
         totals["state_loss"] += float(losses["state_loss"].item()) * n
-        totals["correct"] += float((output[:, 5:10].detach().argmax(dim=-1) == states).sum().item())
+        logits = output[:, 5 : 5 + num_states].detach()
+        totals["correct"] += float((logits.argmax(dim=-1) == states).sum().item())
+        totals["factor_abs_error"] += float(torch.abs(output[:, :5].detach() - factors).sum().item())
 
     denom = max(totals["count"], 1.0)
     return {
@@ -222,6 +345,7 @@ def run_epoch(
         "factor_loss": totals["factor_loss"] / denom,
         "state_loss": totals["state_loss"] / denom,
         "state_accuracy": totals["correct"] / denom,
+        "factor_mae": totals["factor_abs_error"] / (denom * 5.0),
         "num_samples": denom,
     }
 
@@ -251,6 +375,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-folds", type=int, default=None)
     parser.add_argument("--d-proj", type=int, default=256)
     parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--state-mode", choices=["5class", "3class"], default="5class")
+    parser.add_argument("--class-weights", choices=["none", "balanced"], default="none")
+    parser.add_argument("--state-loss", choices=["ce", "focal"], default="ce")
+    parser.add_argument("--focal-gamma", type=float, default=2.0)
+    parser.add_argument(
+        "--task",
+        choices=["joint", "regression_only", "classification_only"],
+        default="joint",
+    )
     return parser.parse_args()
 
 
@@ -261,13 +394,16 @@ def main() -> None:
     device = torch.device(args.device if args.device != "cuda" or torch.cuda.is_available() else "cpu")
 
     X, labels, metadata, resolved_dir = load_training_arrays(args.data_dir)
-    factors, states = prepare_targets(labels)
+    factors, states = prepare_targets(labels, state_mode=args.state_mode)
     users = users_from_metadata(metadata)
     folds = loso_folds(users, seed=args.seed)
     if args.limit_folds is not None:
         folds = folds[: args.limit_folds]
     if not folds:
         raise RuntimeError("No LOSO folds could be created.")
+
+    num_states = num_states_for_mode(args.state_mode)
+    state_names = state_names_for_mode(args.state_mode)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     all_fold_summaries: List[Dict[str, Any]] = []
@@ -280,12 +416,24 @@ def main() -> None:
         train_idx = fold["train_idx"]
         val_idx = fold["val_idx"]
         test_idx = fold["test_idx"]
-        mean, std, (X_train, X_val, X_test) = normalize_fold(X, train_idx, train_idx, val_idx, test_idx)
+        mean, std, (X_train, X_val, _X_test) = normalize_fold(X, train_idx, train_idx, val_idx, test_idx)
+
+        class_weight_np = compute_class_weights(states[train_idx], num_states, args.class_weights)
+        class_weight_tensor = (
+            torch.from_numpy(class_weight_np).to(device)
+            if class_weight_np is not None
+            else None
+        )
 
         train_loader = make_loader(X_train, factors[train_idx], states[train_idx], batch_size=args.batch_size, shuffle=True)
         val_loader = make_loader(X_val, factors[val_idx], states[val_idx], batch_size=args.batch_size, shuffle=False)
 
-        model = SwitchingGRU(input_flat_dim=INPUT_FLAT_DIM, d_proj=args.d_proj, hidden_dim=args.hidden_dim).to(device)
+        model = SwitchingGRU(
+            input_flat_dim=INPUT_FLAT_DIM,
+            d_proj=args.d_proj,
+            hidden_dim=args.hidden_dim,
+            num_states=num_states,
+        ).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
         best_val = float("inf")
@@ -295,8 +443,28 @@ def main() -> None:
         checkpoint_path = fold_dir / "best.pt"
 
         for epoch in range(1, args.epochs + 1):
-            train_metrics = run_epoch(model, train_loader, device=device, optimizer=optimizer)
-            val_metrics = run_epoch(model, val_loader, device=device, optimizer=None)
+            train_metrics = run_epoch(
+                model,
+                train_loader,
+                device=device,
+                optimizer=optimizer,
+                num_states=num_states,
+                class_weights=class_weight_tensor,
+                state_loss=args.state_loss,
+                task=args.task,
+                focal_gamma=args.focal_gamma,
+            )
+            val_metrics = run_epoch(
+                model,
+                val_loader,
+                device=device,
+                optimizer=None,
+                num_states=num_states,
+                class_weights=class_weight_tensor,
+                state_loss=args.state_loss,
+                task=args.task,
+                focal_gamma=args.focal_gamma,
+            )
             row = {
                 "epoch": epoch,
                 **{f"train_{key}": value for key, value in train_metrics.items()},
@@ -321,7 +489,15 @@ def main() -> None:
                         "hidden_dim": args.hidden_dim,
                         "epoch": epoch,
                         "val_loss": best_val,
-                        "state_names": STATE_NAMES,
+                        "state_names": state_names,
+                        "state_mode": args.state_mode,
+                        "num_states": num_states,
+                        "class_weights": class_weight_np.tolist() if class_weight_np is not None else None,
+                        "class_weight_mode": args.class_weights,
+                        "state_loss": args.state_loss,
+                        "focal_gamma": args.focal_gamma,
+                        "task": args.task,
+                        "experimental": args.state_mode != "5class" or args.task != "joint",
                         "data_dir": str(resolved_dir),
                     },
                     checkpoint_path,
@@ -341,6 +517,12 @@ def main() -> None:
             "val_samples": int(len(val_idx)),
             "test_samples": int(len(test_idx)),
             "checkpoint": str(checkpoint_path),
+            "class_weights": class_weight_np.tolist() if class_weight_np is not None else None,
+            "missing_train_classes": [
+                state_names[idx]
+                for idx, count in enumerate(np.bincount(states[train_idx], minlength=num_states))
+                if count == 0
+            ],
         }
         all_fold_summaries.append(summary)
         print(json.dumps(summary, sort_keys=True))
@@ -350,6 +532,14 @@ def main() -> None:
         "input_shape": list(X.shape),
         "label_shape": list(labels.shape),
         "modality_index": SWITCHING_MODALITY_INDEX,
+        "state_mode": args.state_mode,
+        "state_names": state_names,
+        "num_states": num_states,
+        "class_weight_mode": args.class_weights,
+        "state_loss": args.state_loss,
+        "focal_gamma": args.focal_gamma,
+        "task": args.task,
+        "experimental": args.state_mode != "5class" or args.task != "joint",
         "folds": all_fold_summaries,
         "device": str(device),
     }
