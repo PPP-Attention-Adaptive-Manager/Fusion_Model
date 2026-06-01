@@ -1,0 +1,19 @@
+{
+  "encoder_type": "GraphSAGE",
+  "training_type": "GAE",
+  "decoder_used_for_training": "directed",
+  "decoder_used_at_inference": false,
+  "hidden_dim": 128,
+  "embedding_dim": 64,
+  "input_dim": 169,
+  "edge_attr_dim": 17,
+  "use_edge_attr": true,
+  "dropout": 0.1,
+  "normalize": false,
+  "window_size_s": 120,
+  "node_feature_dim": 169,
+  "edge_feature_dim": 17,
+  "make_undirected": false,
+  "source_checkpoint_epoch": 34,
+  "source_selection_metric": "val_topk_f1"
+}

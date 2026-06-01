@@ -1,0 +1,9 @@
+{
+  "artifact_type": "qa_debug_decoder_only",
+  "decoder_type": "directed",
+  "training_type": "GAE",
+  "embedding_dim": 64,
+  "source_checkpoint": "gnn_project\\outputs\\checkpoints\\best.pt",
+  "source_checkpoint_epoch": 34,
+  "used_by_fusion": false
+}
