@@ -62,11 +62,10 @@ class KeyboardTCN(BaseModalityModel, RollingSequenceMixin):
         self.state_head = nn.Linear(128, 5)
 
     def forward(self, x):
+        feat = self.projector(x)
 
-        x = self.projector(x)
-
-        self.append_step(x)
-        seq = self.get_sequence(x)
+        self.append_step(feat)
+        seq = self.get_sequence(feat)
 
         seq = seq.transpose(1, 2)
 
@@ -87,4 +86,5 @@ class KeyboardTCN(BaseModalityModel, RollingSequenceMixin):
         ], dim=-1)
 
     def reset_microstate(self):
+        super().reset_microstate()
         self.clear_history()

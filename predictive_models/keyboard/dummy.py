@@ -25,11 +25,9 @@ class DummyKeyboardModel(BaseModalityModel):
         self.state_head = nn.Linear(128, 5)
 
     def forward(self, x: torch.Tensor):
+        feat = self.projector(x)
 
-        # mandatory projector
-        x = self.projector(x)
-
-        feat = self.backbone(x)
+        feat = self.backbone(feat)
 
         factors = self.factor_head(feat)
 
@@ -46,4 +44,4 @@ class DummyKeyboardModel(BaseModalityModel):
         ], dim=-1)
 
     def reset_microstate(self):
-        pass
+        super().reset_microstate()

@@ -1,705 +1,391 @@
-# Keyboard Modality — Integratable Model Suite
+# Keyboard Modality — Model Suite
 
-This document provides 4 fully project-compatible keyboard predictive model implementations for the AAM Inférer fusion architecture.
+Predictive model implementations for the **AAM Inférer** fusion architecture. Four architectures are provided, all hot-swappable via `__init__.py`.
 
-Included:
+---
 
-1. GRU baseline
-2. TCN model
-3. Transformer model
-4. Hybrid TCN + Transformer model
-5. Unified evaluation/training scaffold
-6. Model comparison table
-7. Integration instructions
-8. Recommended experiment order
+## Quick Start
 
-All implementations:
+Switch the active model by uncommenting the relevant line in `__init__.py`:
+
+```python
+# predictive_models/keyboard/__init__.py
+
+# from .v1_gru        import KeyboardGRU         as ActiveModel  # stable baseline
+# from .v2_tcn        import KeyboardTCN         as ActiveModel  # fast & efficient
+# from .v3_transformer import KeyboardTransformer as ActiveModel  # strong paper model
+from .v4_hybrid      import KeyboardHybrid      as ActiveModel  # recommended
+```
+
+---
+
+## Project Layout
+
+```
+predictive_models/
+└── keyboard/
+    ├── __init__.py        ← model switch
+    ├── dummy.py
+    ├── v1_gru.py          ← GRU baseline
+    ├── v2_tcn.py          ← TCN model
+    ├── v3_transformer.py  ← Transformer model
+    ├── v4_hybrid.py       ← Hybrid TCN + Transformer
+    ├── common.py          ← shared utilities
+    └── train_compare.py   ← training & evaluation script
+```
+
+---
+
+## Shared Contract
+
+All models:
 
 - subclass `BaseModalityModel`
-- accept `(B, input_flat_dim)`
-- return `(B, 12)`
-- use `compute_uncertainty()`
+- accept input of shape `(B, input_flat_dim)`
+- return output of shape `(B, 12)`
+- use `compute_uncertainty()` for uncertainty outputs
 - support LOSO reset via `reset_microstate()`
 - preserve raw logits contract
 - are hot-swappable through `__init__.py`
 
 ---
 
-# 1. Folder Layout
+## Model Overview
 
-```text
-predictive_models/
-└── keyboard/
-    ├── __init__.py
-    ├── dummy.py
-    ├── v1_gru.py
-    ├── v2_tcn.py
-    ├── v3_transformer.py
-    ├── v4_hybrid.py
-    ├── common.py
-    └── train_compare.py
+| Model | File | Architecture | Best For |
+|---|---|---|---|
+| `KeyboardGRU` | `v1_gru.py` | GRU + MLP | Stable baseline, easy debugging |
+| `KeyboardTCN` | `v2_tcn.py` | Dilated TCN | Fast inference, real-time use |
+| `KeyboardTransformer` | `v3_transformer.py` | Transformer encoder | Strong research model |
+| `KeyboardHybrid` | `v4_hybrid.py` | TCN → Transformer | Best overall architecture |
+
+---
+
+## Shared Utilities — `common.py`
+
+### `RollingSequenceMixin`
+
+Maintains a rolling temporal context window across 1 Hz ticks.
+
+```python
+self.init_sequence_buffer(seq_len)   # initialise buffer
+self.append_step(x)                  # x: (B, D)
+seq = self.get_sequence(x)           # returns (B, T, D)
+self.clear_history()                 # call on LOSO reset
+```
+
+### `AttentionPooling`
+
+Learnable attention-weighted pooling over the time dimension.
+
+```python
+# Input:  (B, T, D)
+# Output: (B, D)
+pool = AttentionPooling(dim=256)
+out  = pool(seq)
 ```
 
 ---
 
-# 2. Shared Utilities — common.py
+## Models
+
+### 1 · GRU Baseline — `v1_gru.py`
+
+A straightforward recurrent model with a persistent hidden state across steps. The simplest architecture and the recommended starting point.
 
 ```python
-# predictive_models/keyboard/common.py
-
-from collections import deque
-
-import torch
-import torch.nn as nn
-
-
-class RollingSequenceMixin:
-    """
-    Maintains rolling temporal context across 1Hz ticks.
-    """
-
-    def init_sequence_buffer(self, seq_len: int):
-        self.seq_len = seq_len
-        self.history = deque(maxlen=seq_len)
-
-    def append_step(self, x: torch.Tensor):
-        """
-        x: (B, D)
-        """
-        self.history.append(x.detach())
-
-    def get_sequence(self, current_x: torch.Tensor):
-        """
-        Returns:
-            (B, T, D)
-        """
-
-        if len(self.history) == 0:
-            for _ in range(self.seq_len):
-                self.history.append(current_x.detach())
-
-        while len(self.history) < self.seq_len:
-            self.history.append(self.history[-1])
-
-        seq = torch.stack(list(self.history), dim=1)
-        return seq
-
-    def clear_history(self):
-        self.history.clear()
-
-
-class AttentionPooling(nn.Module):
-
-    def __init__(self, dim: int):
-        super().__init__()
-        self.attn = nn.Linear(dim, 1)
-
-    def forward(self, x):
-        """
-        x: (B, T, D)
-        """
-
-        weights = torch.softmax(self.attn(x), dim=1)
-        pooled = (weights * x).sum(dim=1)
-        return pooled
-```
-
----
-
-# 3. GRU Baseline — v1_gru.py
-
-```python
-# predictive_models/keyboard/v1_gru.py
-
-import torch
-import torch.nn as nn
-
-from ..base import BaseModalityModel
-from ema.ema import compute_uncertainty
-
-from .common import RollingSequenceMixin
-
-
-class KeyboardGRU(BaseModalityModel, RollingSequenceMixin):
-
-    def __init__(
-        self,
-        input_flat_dim: int,
-        d_proj: int = 256,
-        hidden_dim: int = 128,
-        seq_len: int = 16,
-        num_layers: int = 2,
-    ):
-        super().__init__(input_flat_dim, d_proj)
-
-        self.init_sequence_buffer(seq_len)
-
-        self.gru = nn.GRU(
-            input_size=d_proj,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=0.1,
-        )
-
-        self.norm = nn.LayerNorm(hidden_dim)
-
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(0.1),
-        )
-
-        self.factor_head = nn.Linear(hidden_dim, 5)
-        self.state_head = nn.Linear(hidden_dim, 5)
-
-        self.microstate = {}
-
-    def forward(self, x: torch.Tensor):
-        """
-        x: (B, input_flat_dim)
-        """
-
-        x = self.projector(x)
-
-        self.append_step(x)
-        seq = self.get_sequence(x)
-
-        h = self.microstate.get("h", None)
-
-        out, h_new = self.gru(seq, h)
-
-        self.microstate["h"] = h_new.detach()
-
-        feat = out[:, -1]
-        feat = self.norm(feat)
-        feat = feat + self.mlp(feat)
-
-        factors = self.factor_head(feat)
-        logits = self.state_head(feat)
-
-        H_norm, M = compute_uncertainty(logits)
-
-        return torch.cat([
-            factors,
-            logits,
-            H_norm.unsqueeze(-1),
-            M.unsqueeze(-1),
-        ], dim=-1)
-
-    def reset_microstate(self):
-        self.microstate = {}
-        self.clear_history()
-```
-
----
-
-# 4. TCN Model — v2_tcn.py
-
-```python
-# predictive_models/keyboard/v2_tcn.py
-
-import torch
-import torch.nn as nn
-
-from ..base import BaseModalityModel
-from ema.ema import compute_uncertainty
-
-from .common import RollingSequenceMixin
-
-
-class TemporalBlock(nn.Module):
-
-    def __init__(self, channels, dilation):
-        super().__init__()
-
-        self.net = nn.Sequential(
-            nn.Conv1d(
-                channels,
-                channels,
-                kernel_size=3,
-                padding=dilation,
-                dilation=dilation,
-            ),
-            nn.GELU(),
-            nn.BatchNorm1d(channels),
-            nn.Dropout(0.1),
-        )
-
-    def forward(self, x):
-        return x + self.net(x)
-
-
-class KeyboardTCN(BaseModalityModel, RollingSequenceMixin):
-
-    def __init__(
-        self,
-        input_flat_dim: int,
-        d_proj: int = 256,
-        seq_len: int = 16,
-    ):
-        super().__init__(input_flat_dim, d_proj)
-
-        self.init_sequence_buffer(seq_len)
-
-        self.tcn = nn.Sequential(
-            TemporalBlock(d_proj, dilation=1),
-            TemporalBlock(d_proj, dilation=2),
-            TemporalBlock(d_proj, dilation=4),
-            TemporalBlock(d_proj, dilation=8),
-        )
-
-        self.pool = nn.AdaptiveAvgPool1d(1)
-
-        self.head = nn.Sequential(
-            nn.Linear(d_proj, 128),
-            nn.GELU(),
-            nn.Dropout(0.1),
-        )
-
-        self.factor_head = nn.Linear(128, 5)
-        self.state_head = nn.Linear(128, 5)
-
-    def forward(self, x):
-
-        x = self.projector(x)
-
-        self.append_step(x)
-        seq = self.get_sequence(x)
-
-        seq = seq.transpose(1, 2)
-
-        feat = self.tcn(seq)
-        feat = self.pool(feat).squeeze(-1)
-        feat = self.head(feat)
-
-        factors = self.factor_head(feat)
-        logits = self.state_head(feat)
-
-        H_norm, M = compute_uncertainty(logits)
-
-        return torch.cat([
-            factors,
-            logits,
-            H_norm.unsqueeze(-1),
-            M.unsqueeze(-1),
-        ], dim=-1)
-
-    def reset_microstate(self):
-        self.clear_history()
-```
-
----
-
-# 5. Transformer Model — v3_transformer.py
-
-```python
-# predictive_models/keyboard/v3_transformer.py
-
-import torch
-import torch.nn as nn
-
-from ..base import BaseModalityModel
-from ema.ema import compute_uncertainty
-
-from .common import RollingSequenceMixin
-from .common import AttentionPooling
-
-
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, d_model, max_len=512):
-        super().__init__()
-
-        pe = torch.zeros(max_len, d_model)
-
-        position = torch.arange(0, max_len).unsqueeze(1)
-
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2)
-            * (-torch.log(torch.tensor(10000.0)) / d_model)
-        )
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        self.register_buffer("pe", pe.unsqueeze(0))
-
-    def forward(self, x):
-        return x + self.pe[:, :x.size(1)]
-
-
-class KeyboardTransformer(BaseModalityModel, RollingSequenceMixin):
-
-    def __init__(
-        self,
-        input_flat_dim: int,
-        d_proj: int = 256,
-        seq_len: int = 24,
-        nhead: int = 8,
-        num_layers: int = 3,
-    ):
-        super().__init__(input_flat_dim, d_proj)
-
-        self.init_sequence_buffer(seq_len)
-
-        self.positional = PositionalEncoding(d_proj)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_proj,
-            nhead=nhead,
-            batch_first=True,
-            dim_feedforward=512,
-            dropout=0.1,
-            activation="gelu",
-        )
-
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_layers,
-        )
-
-        self.pool = AttentionPooling(d_proj)
-
-        self.shared = nn.Sequential(
-            nn.Linear(d_proj, 128),
-            nn.GELU(),
-            nn.Dropout(0.1),
-        )
-
-        self.factor_head = nn.Linear(128, 5)
-        self.state_head = nn.Linear(128, 5)
-
-    def forward(self, x):
-
-        x = self.projector(x)
-
-        self.append_step(x)
-        seq = self.get_sequence(x)
-
-        seq = self.positional(seq)
-
-        feat = self.transformer(seq)
-        feat = self.pool(feat)
-        feat = self.shared(feat)
-
-        factors = self.factor_head(feat)
-        logits = self.state_head(feat)
-
-        H_norm, M = compute_uncertainty(logits)
-
-        return torch.cat([
-            factors,
-            logits,
-            H_norm.unsqueeze(-1),
-            M.unsqueeze(-1),
-        ], dim=-1)
-
-    def reset_microstate(self):
-        self.clear_history()
-```
-
----
-
-# 6. Hybrid TCN + Transformer — v4_hybrid.py
-
-```python
-# predictive_models/keyboard/v4_hybrid.py
-
-import torch
-import torch.nn as nn
-
-from ..base import BaseModalityModel
-from ema.ema import compute_uncertainty
-
-from .common import RollingSequenceMixin
-from .common import AttentionPooling
-
-
-class HybridTCNBlock(nn.Module):
-
-    def __init__(self, dim, dilation):
-        super().__init__()
-
-        self.block = nn.Sequential(
-            nn.Conv1d(
-                dim,
-                dim,
-                kernel_size=3,
-                padding=dilation,
-                dilation=dilation,
-            ),
-            nn.GELU(),
-            nn.BatchNorm1d(dim),
-            nn.Dropout(0.1),
-        )
-
-    def forward(self, x):
-        return x + self.block(x)
-
-
-class KeyboardHybrid(BaseModalityModel, RollingSequenceMixin):
-
-    def __init__(
-        self,
-        input_flat_dim: int,
-        d_proj: int = 256,
-        seq_len: int = 24,
-    ):
-        super().__init__(input_flat_dim, d_proj)
-
-        self.init_sequence_buffer(seq_len)
-
-        self.tcn = nn.Sequential(
-            HybridTCNBlock(d_proj, 1),
-            HybridTCNBlock(d_proj, 2),
-            HybridTCNBlock(d_proj, 4),
-        )
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_proj,
-            nhead=8,
-            batch_first=True,
-            dim_feedforward=512,
-            dropout=0.1,
-            activation="gelu",
-        )
-
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=2,
-        )
-
-        self.pool = AttentionPooling(d_proj)
-
-        self.shared = nn.Sequential(
-            nn.Linear(d_proj, 128),
-            nn.GELU(),
-            nn.Dropout(0.1),
-        )
-
-        self.factor_head = nn.Linear(128, 5)
-        self.state_head = nn.Linear(128, 5)
-
-    def forward(self, x):
-
-        x = self.projector(x)
-
-        self.append_step(x)
-        seq = self.get_sequence(x)
-
-        tcn_feat = self.tcn(seq.transpose(1, 2))
-        tcn_feat = tcn_feat.transpose(1, 2)
-
-        tr_feat = self.transformer(tcn_feat)
-
-        feat = self.pool(tr_feat)
-        feat = self.shared(feat)
-
-        factors = self.factor_head(feat)
-        logits = self.state_head(feat)
-
-        H_norm, M = compute_uncertainty(logits)
-
-        return torch.cat([
-            factors,
-            logits,
-            H_norm.unsqueeze(-1),
-            M.unsqueeze(-1),
-        ], dim=-1)
-
-    def reset_microstate(self):
-        self.clear_history()
-```
-
----
-
-# 7. Integration Switch — __init__.py
-
-```python
-# predictive_models/keyboard/__init__.py
-
-# GRU baseline
-# from .v1_gru import KeyboardGRU as ActiveModel
-
-# TCN
-# from .v2_tcn import KeyboardTCN as ActiveModel
-
-# Transformer
-# from .v3_transformer import KeyboardTransformer as ActiveModel
-
-# Hybrid (recommended final model)
-from .v4_hybrid import KeyboardHybrid as ActiveModel
-```
-
----
-
-# 8. Unified Training + Comparison Script
-
-```python
-# predictive_models/keyboard/train_compare.py
-
-from sklearn.metrics import (
-    f1_score,
-    matthews_corrcoef,
-    confusion_matrix,
+model = KeyboardGRU(
+    input_flat_dim = 512,
+    d_proj         = 256,
+    hidden_dim     = 128,
+    seq_len        = 16,
+    num_layers     = 2,
 )
+```
 
-import torch
-import torch.nn.functional as F
+**Output layout** `(B, 12)`:
 
+| Indices | Content |
+|---|---|
+| 0–4 | workload factor predictions |
+| 5–9 | cognitive state logits |
+| 10 | normalised entropy H |
+| 11 | uncertainty margin M |
 
-MODELS = {
-    "gru": "v1_gru.KeyboardGRU",
-    "tcn": "v2_tcn.KeyboardTCN",
-    "transformer": "v3_transformer.KeyboardTransformer",
-    "hybrid": "v4_hybrid.KeyboardHybrid",
-}
+---
 
+### 2 · TCN Model — `v2_tcn.py`
 
-class JointLoss(torch.nn.Module):
+Four dilated temporal convolutional blocks with an exponentially growing receptive field. Very fast at inference and well-suited for real-time use.
 
-    def forward(self, output, tlx_targets, state_targets):
+```python
+model = KeyboardTCN(
+    input_flat_dim = 512,
+    d_proj         = 256,
+    seq_len        = 16,
+)
+```
 
-        factor_loss = F.huber_loss(
-            output[:, :5],
-            tlx_targets,
-        )
+Dilation schedule: `1 → 2 → 4 → 8`
 
-        state_loss = F.cross_entropy(
-            output[:, 5:10],
-            state_targets,
-        )
+---
 
-        total = 0.4 * factor_loss + 0.6 * state_loss
+### 3 · Transformer Model — `v3_transformer.py`
 
-        return total
+A multi-head self-attention encoder with sinusoidal positional encoding and attention pooling. Captures long-range dependencies across the sequence.
 
-
-def evaluate(y_true, y_pred):
-
-    return {
-        "macro_f1": f1_score(y_true, y_pred, average="macro"),
-        "mcc": matthews_corrcoef(y_true, y_pred),
-        "confusion_matrix": confusion_matrix(y_true, y_pred),
-    }
+```python
+model = KeyboardTransformer(
+    input_flat_dim = 512,
+    d_proj         = 256,
+    seq_len        = 24,
+    nhead          = 8,
+    num_layers     = 3,
+)
 ```
 
 ---
 
-# 9. Recommended Experiment Order
+### 4 · Hybrid TCN + Transformer — `v4_hybrid.py`
 
-## Phase 1 — Sanity Baselines
+Local rhythm patterns are first extracted by a TCN (dilations `1 → 2 → 4`), then refined by a 2-layer Transformer encoder with attention pooling. Combines the strengths of both architectures.
 
-Run:
-
-1. GRU
-2. TCN
-
-Purpose:
-- validate labels
-- validate temporal dynamics
-- validate LOSO
-- detect leakage
+```python
+model = KeyboardHybrid(
+    input_flat_dim = 512,
+    d_proj         = 256,
+    seq_len        = 24,
+)
+```
 
 ---
 
-## Phase 2 — Main Research Models
+## Training & Evaluation
 
-Run:
+### Input Data
 
-1. Transformer
-2. Hybrid
+```
+data/
+├── tucker_slices.npy     # shape (N, 4, 512)
+├── nasa_tlx_labels.npy
+└── metadata.json
+```
 
-Purpose:
-- maximize state separation
-- improve overload detection
-- improve distraction transitions
+The keyboard modality slice is extracted as:
+
+```python
+KEYBOARD_MODALITY_IDX = 1   # → model input shape (B, 512)
+```
+
+### Targets
+
+**Workload factors** `(N, 5)` — continuous regression targets derived from NASA-TLX:
+
+| Index | Factor |
+|---|---|
+| 0 | Mental Demand |
+| 1 | Temporal Demand |
+| 2 | Effort |
+| 3 | Frustration |
+| 4 | Arousal Proxy `(TD + Effort) / 2` |
+
+**Cognitive states** `(N,)` — 5-class classification derived from NASA-TLX thresholds:
+
+| Class | State |
+|---|---|
+| 0 | Flow |
+| 1 | Neutral |
+| 2 | Bored |
+| 3 | Distracted |
+| 4 | Overloaded |
+
+### Loss Function
+
+```python
+total_loss = 0.4 * HuberLoss(pred_factors, true_factors) \
+           + 0.6 * CrossEntropy(pred_logits, true_states)
+```
+
+### Evaluation Metrics
+
+**Classification:**
+
+| Metric | Description |
+|---|---|
+| Macro F1 | Primary metric |
+| Accuracy | Overall accuracy |
+| MCC | Matthews Correlation Coefficient |
+| Cohen's Kappa | Agreement beyond chance |
+| Confusion Matrix | Per-class analysis |
+
+**Regression (workload factors):**
+
+| Metric | Scale |
+|---|---|
+| R² | — |
+| MAE | 0–1 and 0–100 (NASA-TLX) |
+| RMSE | 0–1 and 0–100 (NASA-TLX) |
 
 ---
 
-# 10. Expected Performance Ranking
+## Leave-One-Subject-Out (LOSO) Evaluation
 
-| Model | Expected F1 | Stability | Compute | Research Value |
-|---|---|---|---|---|
-| GRU | High | Very High | Low | Strong baseline |
-| TCN | High | High | Very Low | Efficient realtime |
-| Transformer | Very High | Medium | Medium-High | Strong paper value |
-| Hybrid | Highest | Medium | High | Best final architecture |
+```
+Train = all subjects except one
+Test  = held-out subject
+```
+
+Normalisation uses train-set statistics only to prevent subject leakage:
+
+```python
+x_norm = (x - train_mean) / train_std
+```
 
 ---
 
-# 11. Recommended Hyperparameters
+## Running Experiments
+
+### Benchmark all models (LOSO)
+
+```bash
+python predictive_models/keyboard/train_compare.py \
+    --data_dir data \
+    --model all \
+    --out_csv results.csv \
+    --plot_path comparison.png
+```
+
+### Benchmark a single model
+
+```bash
+python predictive_models/keyboard/train_compare.py \
+    --data_dir data \
+    --model hybrid
+```
+
+### Analyse learning dynamics
+
+```bash
+python predictive_models/keyboard/train_compare.py \
+    --data_dir data \
+    --model hybrid \
+    --curve_plot_path hybrid_curves.png \
+    --epoch_csv hybrid_epochs.csv
+```
+
+### Train final global model
+
+```bash
+python predictive_models/keyboard/train_compare.py \
+    --data_dir data \
+    --model hybrid \
+    --train_full \
+    --full_ckpt_path checkpoints/keyboard_hybrid_global.pt
+```
+
+---
+
+## Checkpoint Format
+
+**LOSO checkpoint** (one per subject):
+
+```python
+{
+    "state_dict",
+    "norm_mean",
+    "norm_std",
+    "metrics",
+    "test_user",
+}
+```
+
+**Global checkpoint:**
+
+```python
+{
+    "state_dict",
+    "norm_mean",
+    "norm_std",
+    "metrics",
+    "model_key",
+}
+```
+
+---
+
+## Output Files
+
+| Flag | File | Contents |
+|---|---|---|
+| `--out_csv` | `results.csv` | Per-model summary metrics |
+| `--out_json` | `results.json` | Full comparison metrics |
+| `--plot_path` | `comparison.png` | Macro F1 / MCC / Kappa bar chart |
+| `--curve_plot_path` | `curves.png` | Train/val loss + val F1 per epoch |
+| `--epoch_csv` | `epochs.csv` | Per-epoch metrics for all folds |
+
+---
+
+## Recommended Experiment Order
+
+**Phase 1 — Sanity baselines**
+
+Run `gru` then `tcn` to validate label quality, temporal dynamics, and LOSO setup before committing compute to larger models.
+
+**Phase 2 — Main research models**
+
+Run `transformer` then `hybrid` to maximise state separation and evaluate overload/distraction transitions.
+
+**Phase 3 — Final deployment**
+
+Train the best model with `--train_full` on all available data.
+
+---
+
+## Hyperparameters
 
 | Parameter | Recommended |
 |---|---|
-| seq_len | 16–24 |
-| d_proj | 256 |
-| dropout | 0.1 |
-| optimizer | AdamW |
-| lr | 1e-4 |
-| scheduler | cosine decay |
-| batch size | 32 |
-| gradient clipping | 1.0 |
+| `seq_len` | 16–24 |
+| `d_proj` | 256 |
+| `dropout` | 0.1 |
+| `optimizer` | AdamW |
+| `lr` | 1e-4 |
+| `scheduler` | cosine decay |
+| `batch_size` | 32 |
+| `gradient_clip` | 1.0 |
 
 ---
 
-# 12. Most Important Keyboard Signals
+## Expected Performance
 
-The models are expected to learn strongest predictive power from:
+| Model | Expected F1 | Stability | Compute | Notes |
+|---|---|---|---|---|
+| GRU | High | Very High | Low | Strong baseline |
+| TCN | High | High | Very Low | Best for real-time |
+| Transformer | Very High | Medium | Medium | Strong paper value |
+| Hybrid | Highest | Medium | High | Best overall |
 
-- typing burstiness
-- pause distribution
-- correction density
-- typing speed volatility
-- rhythm stability
-- interruption recovery
-- hesitation patterns
-- cadence entropy
+---
+
+## Key Predictive Signals
+
+The models are expected to derive the most signal from:
+
+- typing burstiness and pause distribution
+- correction density and typing speed volatility
+- rhythm stability and cadence entropy
+- interruption recovery and hesitation patterns
 - sustained activity coherence
 - rapid context-switch signatures
 
-These strongly correlate with:
-
-- overload
-- distraction
-- frustration
-- flow stability
+These correlate most strongly with **overload**, **distraction**, **frustration**, and **flow stability**.
 
 ---
 
-# 13. Final Recommendation
+## Recommendations
 
-## Best engineering baseline
+**Best engineering baseline → `KeyboardGRU`**
+Stable, lightweight, easy to debug, and strong under LOSO.
 
-Use:
-
-```python
-KeyboardGRU
-```
-
-because it is:
-- stable
-- easy to debug
-- strong under LOSO
-- lightweight
-
----
-
-## Best final paper model
-
-Use:
-
-```python
-KeyboardHybrid
-```
-
-because it combines:
-
-- local rhythm extraction (TCN)
-- long-range cognitive transitions (Transformer)
-- realtime compatibility
-- strong multimodal behavioral modeling
-
-This is likely the highest-ceiling architecture for the keyboard modality in the current fusion framework.
-
+**Best final model → `KeyboardHybrid`**
+Combines local rhythm extraction (TCN) with long-range cognitive transition modelling (Transformer). Highest representational capacity and the recommended architecture for integration into the AAM Inférer fusion framework.

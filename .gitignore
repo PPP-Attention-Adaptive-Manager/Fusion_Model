@@ -8,3 +8,7 @@ build/
 .env
 venv/
 pre_embedders/notif/data/
+*.pt
+*.csv
+*.png
+*.json

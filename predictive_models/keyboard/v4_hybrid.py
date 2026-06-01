@@ -76,22 +76,21 @@ class KeyboardHybrid(BaseModalityModel, RollingSequenceMixin):
         self.state_head = nn.Linear(128, 5)
 
     def forward(self, x):
+        feat = self.projector(x)
 
-        x = self.projector(x)
-
-        self.append_step(x)
-        seq = self.get_sequence(x)
+        self.append_step(feat)
+        seq = self.get_sequence(feat)
 
         tcn_feat = self.tcn(seq.transpose(1, 2))
         tcn_feat = tcn_feat.transpose(1, 2)
 
         tr_feat = self.transformer(tcn_feat)
 
-        feat = self.pool(tr_feat)
-        feat = self.shared(feat)
+        pooled = self.pool(tr_feat)
+        pooled = self.shared(pooled)
 
-        factors = self.factor_head(feat)
-        logits = self.state_head(feat)
+        factors = self.factor_head(pooled)
+        logits = self.state_head(pooled)
 
         H_norm, M = compute_uncertainty(logits)
 
@@ -103,4 +102,5 @@ class KeyboardHybrid(BaseModalityModel, RollingSequenceMixin):
         ], dim=-1)
 
     def reset_microstate(self):
+        super().reset_microstate()
         self.clear_history()

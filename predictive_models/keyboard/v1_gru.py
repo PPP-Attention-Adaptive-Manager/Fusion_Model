@@ -49,10 +49,10 @@ class KeyboardGRU(BaseModalityModel, RollingSequenceMixin):
         x: (B, input_flat_dim)
         """
 
-        x = self.projector(x)
+        feat = self.projector(x)
 
-        self.append_step(x)
-        seq = self.get_sequence(x)
+        self.append_step(feat)
+        seq = self.get_sequence(feat)
 
         h = self.microstate.get("h", None)
 
