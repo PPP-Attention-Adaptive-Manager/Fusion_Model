@@ -30,14 +30,14 @@ The GNN decoder is not used during fusion inference.
 ## 2. New Files
 
 ```text
-fusion_dataset.py
-split_utils.py
-run_fusion_dataset_smoke.py
-train_fusion.py
-overfit_tiny_batch.py
-evaluate_fusion.py
+fusion_data/dataset.py
+fusion_data/splits.py
+scripts/fusion/run_fusion_dataset_smoke.py
+scripts/fusion/train_fusion.py
+scripts/fusion/overfit_tiny_batch.py
+scripts/fusion/evaluate_fusion.py
 tests/test_fusion_shapes.py
-FUSION_TRAINING_REPORT.md
+docs/FUSION_TRAINING_REPORT.md
 ```
 
 ## 3. Data Assumptions
@@ -180,20 +180,20 @@ Distracted: temporal_demand high or fragmentation/interruption proxy high
 Neutral: otherwise
 ```
 
-Default thresholds are in `LabelThresholds` inside `fusion_dataset.py`.
+Default thresholds are in `LabelThresholds` inside `fusion_data/dataset.py`.
 
 ## 6. Session-Level Split
 
 Implemented in:
 
 ```text
-split_utils.py
+fusion_data/splits.py
 ```
 
 Command:
 
 ```powershell
-python split_utils.py --data-dir data
+python -m fusion_data.splits --data-dir data
 ```
 
 Output:
@@ -214,7 +214,7 @@ Rules:
 Command:
 
 ```powershell
-python run_fusion_dataset_smoke.py --data-dir data --limit-sessions 10
+python scripts/fusion/run_fusion_dataset_smoke.py --data-dir data --limit-sessions 10
 ```
 
 Output:
@@ -240,7 +240,7 @@ Checks:
 Command:
 
 ```powershell
-python train_fusion.py --data-dir data --epochs 50 --batch-size 8 --device cuda
+python scripts/fusion/train_fusion.py --data-dir data --epochs 50 --batch-size 8 --device cuda
 ```
 
 If CUDA is unavailable, the script falls back to CPU.
@@ -282,7 +282,7 @@ outputs/fusion_train/metrics.json
 Command:
 
 ```powershell
-python overfit_tiny_batch.py --data-dir data --epochs 200
+python scripts/fusion/overfit_tiny_batch.py --data-dir data --epochs 200
 ```
 
 Pass condition:
@@ -298,7 +298,7 @@ This detects broken gradient flow, wrong shapes, or a bad loss connection.
 Command:
 
 ```powershell
-python evaluate_fusion.py --checkpoint outputs/fusion_train/checkpoints/best.pt --data-dir data --split test
+python scripts/fusion/evaluate_fusion.py --checkpoint outputs/fusion_train/checkpoints/best.pt --data-dir data --split test
 ```
 
 Output:
@@ -342,17 +342,17 @@ Current limitations:
 - The GNN switching encoder is frozen and used only for embeddings, as required.
 - The current training batches are session-split safe, but the model microstate
   is reset per batch to avoid hidden-state leakage through mixed batch positions.
-- `SwitchingGRU` is wired but not yet trained before running `train_fusion.py`.
+- `SwitchingGRU` is wired but not yet trained before running `scripts/fusion/train_fusion.py`.
 
 ## 13. Recommended Next Step
 
 Run in this order:
 
 ```powershell
-python run_fusion_dataset_smoke.py --data-dir data --limit-sessions 10
-python overfit_tiny_batch.py --data-dir data --epochs 200
-python train_fusion.py --data-dir data --epochs 50 --batch-size 8 --device cuda
-python evaluate_fusion.py --checkpoint outputs/fusion_train/checkpoints/best.pt --data-dir data --split test
+python scripts/fusion/run_fusion_dataset_smoke.py --data-dir data --limit-sessions 10
+python scripts/fusion/overfit_tiny_batch.py --data-dir data --epochs 200
+python scripts/fusion/train_fusion.py --data-dir data --epochs 50 --batch-size 8 --device cuda
+python scripts/fusion/evaluate_fusion.py --checkpoint outputs/fusion_train/checkpoints/best.pt --data-dir data --split test
 ```
 
 Once mouse and keyboard embedders are available, replace their zero fallback

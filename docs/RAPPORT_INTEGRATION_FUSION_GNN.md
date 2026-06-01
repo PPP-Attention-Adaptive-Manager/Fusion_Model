@@ -624,13 +624,13 @@ Ce test verifie notamment:
 ### Smoke test sur un seul graphe
 
 ```powershell
-python run_switching_fusion_smoke.py --graph data\session_20260516_105702_81c740\data_graph\data_graph_120s\graph_001.json
+python scripts\fusion\run_switching_fusion_smoke.py --graph data\session_20260516_105702_81c740\data_graph\data_graph_120s\graph_001.json
 ```
 
 Ou auto-detection du premier graphe sous `data/`:
 
 ```powershell
-python run_switching_fusion_smoke.py
+python scripts\fusion\run_switching_fusion_smoke.py
 ```
 
 Champs a verifier:
@@ -647,19 +647,19 @@ fusion_per_model_shapes = [[1,12], [1,12], [1,12], [1,12]]
 ### Smoke test sur une session complete
 
 ```powershell
-python run_fusion_session_smoke.py --session-dir data\session_20260516_105702_81c740
+python scripts\fusion\run_fusion_session_smoke.py --session-dir data\session_20260516_105702_81c740
 ```
 
 Limiter a 2 fenetres:
 
 ```powershell
-python run_fusion_session_smoke.py --session-dir data\session_20260516_105702_81c740 --limit 2
+python scripts\fusion\run_fusion_session_smoke.py --session-dir data\session_20260516_105702_81c740 --limit 2
 ```
 
 Choisir un fichier output:
 
 ```powershell
-python run_fusion_session_smoke.py --session-dir data\session_20260516_105702_81c740 --limit 2 --output outputs\fusion_smoke\session_20260516_105702_81c740\fusion_outputs_check.jsonl
+python scripts\fusion\run_fusion_session_smoke.py --session-dir data\session_20260516_105702_81c740 --limit 2 --output outputs\fusion_smoke\session_20260516_105702_81c740\fusion_outputs_check.jsonl
 ```
 
 Attendu dans le resume:

@@ -6,19 +6,24 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sys
 from typing import Any, Dict, Iterable
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from fusion_dataset import (
+from fusion_data.dataset import (
     FusionWindowDataset,
     SessionBatchSampler,
     fusion_collate_fn,
 )
 from fusion_model import DEFAULT_D_DIMS, InferrerFusion
-from split_utils import load_splits, split_sessions
+from fusion_data.splits import load_splits, split_sessions
 
 
 def compute_fusion_loss(

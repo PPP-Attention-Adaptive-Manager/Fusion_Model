@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from fusion_model import InferrerFusion
-from train_fusion import compute_fusion_loss
+from scripts.fusion.train_fusion import compute_fusion_loss
 
 
 class FusionShapeContractTest(unittest.TestCase):

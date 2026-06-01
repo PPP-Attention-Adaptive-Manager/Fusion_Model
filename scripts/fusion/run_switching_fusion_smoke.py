@@ -1,9 +1,9 @@
 """Runtime smoke test for the switching GraphSAGE -> fusion path.
 
 Examples:
-    python run_switching_fusion_smoke.py
-    python run_switching_fusion_smoke.py --graph data/session_x/data_graph/data_graph_120s/graph_001.json
-    python run_switching_fusion_smoke.py --require-graph
+    python scripts/fusion/run_switching_fusion_smoke.py
+    python scripts/fusion/run_switching_fusion_smoke.py --graph data/session_x/data_graph/data_graph_120s/graph_001.json
+    python scripts/fusion/run_switching_fusion_smoke.py --require-graph
 """
 
 from __future__ import annotations
@@ -11,7 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any, Optional
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
 import torch

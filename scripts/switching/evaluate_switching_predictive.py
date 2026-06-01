@@ -6,7 +6,12 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sys
 from typing import Any, Dict, List
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -20,7 +25,7 @@ from sklearn.metrics import (
 )
 
 from predictive_models.switching.v1_gru_switching import SwitchingGRU
-from train_switching_predictive import (
+from scripts.switching.train_switching_predictive import (
     INPUT_FLAT_DIM,
     STATE_NAMES,
     load_training_arrays,

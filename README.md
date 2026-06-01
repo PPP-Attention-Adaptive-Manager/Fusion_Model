@@ -6,6 +6,11 @@
 
 ---
 
+Project layout and current command paths are summarized in
+[`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md).
+
+---
+
 ## 1. Pipeline Overview
 
 ```mermaid

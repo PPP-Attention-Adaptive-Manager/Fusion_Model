@@ -92,7 +92,7 @@ No softmax is applied to dims `5:10` before returning.
 Implemented in:
 
 ```text
-train_switching_predictive.py
+scripts/switching/train_switching_predictive.py
 ```
 
 Input label columns:
@@ -184,7 +184,7 @@ Full LOSO training was run on CPU to avoid the Windows CUDA pagefile issue seen
 when loading PyTorch CUDA DLLs:
 
 ```powershell
-python train_switching_predictive.py --data-dir data_for_training --epochs 100 --batch-size 32 --device cpu --output-dir outputs\switching_predictive
+python scripts\switching\train_switching_predictive.py --data-dir data_for_training --epochs 100 --batch-size 32 --device cpu --output-dir outputs\switching_predictive
 ```
 
 Outputs:
@@ -203,7 +203,7 @@ cross-validation. They are not meant to be the final deployment model.
 For deployment-style use, one final model was trained on all samples:
 
 ```powershell
-python train_switching_final.py --data-dir data_for_training --epochs 100 --batch-size 32 --device cpu --output-dir outputs\switching_predictive\final
+python scripts\switching\train_switching_final.py --data-dir data_for_training --epochs 100 --batch-size 32 --device cpu --output-dir outputs\switching_predictive\final
 ```
 
 Final checkpoint:
@@ -225,7 +225,7 @@ validation_loss = 1.116426986560487
 ## 7. Evaluation Command
 
 ```powershell
-python evaluate_switching_predictive.py --data-dir data_for_training --checkpoint-dir outputs\switching_predictive --device cpu --batch-size 128
+python scripts\switching\evaluate_switching_predictive.py --data-dir data_for_training --checkpoint-dir outputs\switching_predictive --device cpu --batch-size 128
 ```
 
 Outputs:
@@ -304,7 +304,7 @@ OK
 Command:
 
 ```powershell
-python overfit_switching_tiny.py --data-dir data_for_training --device cpu --epochs 300 --samples 8
+python scripts\switching\overfit_switching_tiny.py --data-dir data_for_training --device cpu --epochs 300 --samples 8
 ```
 
 Result:

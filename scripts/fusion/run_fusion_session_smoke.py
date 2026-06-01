@@ -5,9 +5,9 @@ switching GraphSAGE embeddings and zero dummy embeddings for mouse, keyboard,
 and notif until those modalities are wired to session data.
 
 Examples:
-    python run_fusion_session_smoke.py
-    python run_fusion_session_smoke.py --session-dir data/session_20260510_191823_9a2425
-    python run_fusion_session_smoke.py --limit 5
+    python scripts/fusion/run_fusion_session_smoke.py
+    python scripts/fusion/run_fusion_session_smoke.py --session-dir data/session_20260510_191823_9a2425
+    python scripts/fusion/run_fusion_session_smoke.py --limit 5
 """
 
 from __future__ import annotations
@@ -16,7 +16,12 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sys
 from typing import Any, Optional
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
 import torch

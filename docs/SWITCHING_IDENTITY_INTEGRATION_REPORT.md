@@ -31,10 +31,10 @@
   - Updated switching documentation to identity-only 64D.
   - Updated default `d_dims` to `[64, 64, 32, 64]`.
 
-- `Architecture.md`
+- `docs/Architecture.md`
   - Updated diagrams and contracts to show the new 64D identity switching path.
 
-- `AAM_TEAMMATE_INTEGRATION_GUIDE2.md`
+- `docs/AAM_TEAMMATE_INTEGRATION_GUIDE2.md`
   - Updated default dimension references to `[64, 64, 32, 64]`.
 
 ## 2. Old path
