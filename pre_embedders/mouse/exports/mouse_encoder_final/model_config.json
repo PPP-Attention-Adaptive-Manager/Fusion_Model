@@ -1,0 +1,36 @@
+{
+  "encoder_class": "MouseEncoderFinal",
+  "architecture": "seq-branch 1D-CNN(8->32->64->64)+meanpool | stats-branch MLP(8->64) | fusion->64D LN; SimCLR proj head + aux head (train only)",
+  "input_schema": "seq (B,8,256) channels[speed,accel,jerk,dx,dy,is_idle,is_click,is_scroll]; stats (B,8) standardized ['speed_mean', 'speed_std', 'speed_max', 'click_rate', 'idle_ratio', 'n_events', 'distance_total', 'scroll_event_count']; event-count window=256 stride=128",
+  "training_objective": "NT-Xent (SimCLR, real augmented positive pairs) + 0.20 * MSE behavioral-stats aux",
+  "seq_channels": 8,
+  "seq_len": 256,
+  "n_stats": 8,
+  "stats_features": [
+    "speed_mean",
+    "speed_std",
+    "speed_max",
+    "click_rate",
+    "idle_ratio",
+    "n_events",
+    "distance_total",
+    "scroll_event_count"
+  ],
+  "aux_features": [
+    "speed_mean",
+    "click_rate",
+    "idle_ratio",
+    "n_events",
+    "distance_total",
+    "scroll_event_count"
+  ],
+  "n_aux": 6,
+  "embedding_dim": 64,
+  "l2_normalize": false,
+  "w_events": 256,
+  "stride": 128,
+  "min_events": 32,
+  "trained": true,
+  "pretrained": false,
+  "model_version": "final_v1"
+}

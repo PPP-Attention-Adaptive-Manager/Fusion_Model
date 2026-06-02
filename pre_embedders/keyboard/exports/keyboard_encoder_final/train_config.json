@@ -1,0 +1,30 @@
+{
+  "modality": "keyboard",
+  "epochs_run": 50,
+  "best_epoch": 30,
+  "best_val_loss": 2.511215015205313,
+  "n_windows": 3303,
+  "n_sessions": 63,
+  "train_windows": 2544,
+  "val_windows": 759,
+  "device": "cpu",
+  "args": {
+    "data_dir": "data",
+    "output_dir": "pre_embedders\\keyboard\\exports\\keyboard_encoder_final",
+    "epochs": 60,
+    "batch_size": 128,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "temperature": 0.2,
+    "aux_weight": 0.2,
+    "window_size": 20,
+    "stride": 10,
+    "hidden_size": 64,
+    "num_layers": 2,
+    "bidirectional": 1,
+    "l2_normalize": 0,
+    "patience": 20,
+    "device": "cpu",
+    "seed": 42
+  }
+}

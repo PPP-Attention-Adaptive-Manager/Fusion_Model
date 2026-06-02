@@ -1,0 +1,28 @@
+{
+  "modality": "mouse",
+  "epochs_run": 24,
+  "best_epoch": 4,
+  "best_val_loss": 2.2186622179877933,
+  "n_windows": 16943,
+  "n_sessions": 72,
+  "train_windows": 12340,
+  "val_windows": 4603,
+  "device": "cpu",
+  "args": {
+    "data_dir": "data",
+    "output_dir": "pre_embedders\\mouse\\exports\\mouse_encoder_final",
+    "epochs": 50,
+    "batch_size": 128,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "temperature": 0.2,
+    "aux_weight": 0.2,
+    "w_events": 256,
+    "stride": 128,
+    "min_events": 32,
+    "l2_normalize": 0,
+    "patience": 20,
+    "device": "cpu",
+    "seed": 42
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "encoder_class": "KeyboardEncoderFinal",
+  "architecture": "BiGRU(2x64) -> Linear+LayerNorm -> 64D; SimCLR proj head + aux head (train only)",
+  "input_schema": "(B, W=20, 3) normalized [hold, ikl, code]; window=20 stride=10",
+  "training_objective": "NT-Xent (SimCLR, real augmented positive pairs) + 0.20 * MSE behavioral-feature aux",
+  "input_size": 3,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "bidirectional": true,
+  "embedding_dim": 64,
+  "l2_normalize": false,
+  "window_size": 20,
+  "stride": 10,
+  "aux_features": [
+    "typing_speed",
+    "mean_hold",
+    "mean_ikl",
+    "std_hold",
+    "std_ikl"
+  ],
+  "n_aux": 5,
+  "trained": true,
+  "pretrained": false,
+  "model_version": "final_v1"
+}
