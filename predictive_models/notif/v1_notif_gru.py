@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from ...ema.ema import compute_uncertainty
-from ..base     import BaseModalityModel
+from ema.ema import compute_uncertainty
+from predictive_models.base import BaseModalityModel
 
 
 class NotifGRU(BaseModalityModel):

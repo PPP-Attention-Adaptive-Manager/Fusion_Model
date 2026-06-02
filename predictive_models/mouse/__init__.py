@@ -1,3 +1,2 @@
-from .v0_baseline import MouseBaselineModel as ActiveModel
-
+from .v2_mouse_gru import MouseGRU as ActiveModel
 __all__ = ["ActiveModel"]
