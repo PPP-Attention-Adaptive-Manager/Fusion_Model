@@ -1,0 +1,71 @@
+{
+  "build_time": "2026-06-02T17:30:07.274559+00:00",
+  "raw_data_dir": "data",
+  "output_dir": "data_training_full_rebuilt",
+  "window_size": "120s",
+  "number_of_sessions": 54,
+  "number_of_windows": 806,
+  "modality_order": [
+    "mouse",
+    "keyboard",
+    "notif",
+    "switching"
+  ],
+  "modality_dims": [
+    64,
+    64,
+    32,
+    64
+  ],
+  "tucker_shape": [
+    806,
+    4,
+    512
+  ],
+  "mouse_export_path": "C:\\Users\\medte\\OneDrive\\Desktop\\Fusion_Model\\pre_embedders\\mouse\\exports\\mouse_encoder_final",
+  "keyboard_export_path": "C:\\Users\\medte\\OneDrive\\Desktop\\Fusion_Model\\pre_embedders\\keyboard\\exports\\keyboard_encoder_final",
+  "notif_export_path": "C:\\Users\\medte\\OneDrive\\Desktop\\Fusion_Model\\pre_embedders\\notif\\models\\notif_mlp.onnx",
+  "switching_export_path": "C:\\Users\\medte\\OneDrive\\Desktop\\Fusion_Model\\pre_embedders\\switching\\exports\\switching_encoder",
+  "device_user_map_path": "device_user_map.csv",
+  "tucker_config": {
+    "impl": "ActiveTFN/LowRankTuckerFusion",
+    "rank": 8,
+    "d_dims": [
+      64,
+      64,
+      32,
+      64
+    ],
+    "seed": 1234,
+    "note": "real four-modal outer-product Tucker; projection weights seeded (precomputed dataset, fusion not trained here)"
+  },
+  "fallback_counts": {
+    "mouse": {
+      "fallback_rows": 161,
+      "fallback_ratio": 0.19975186104218362,
+      "fill": "dataset_mean_nonzero"
+    },
+    "keyboard": {
+      "fallback_rows": 464,
+      "fallback_ratio": 0.575682382133995,
+      "fill": "dataset_mean_nonzero"
+    },
+    "notif": {
+      "fallback_rows": 0,
+      "fallback_ratio": 0.0,
+      "fill": "dataset_mean_nonzero"
+    },
+    "switching": {
+      "fallback_rows": 17,
+      "fallback_ratio": 0.02109181141439206,
+      "fill": "dataset_mean_nonzero"
+    }
+  },
+  "fallback_policy": "non-zero dataset-mean fill, logged per row (never silent zeros)",
+  "excluded_sessions_count": 19,
+  "excluded_sessions_by_reason": {
+    "no_graph_120s": 6,
+    "no_graph_120s;no_labels": 13
+  },
+  "git_commit": "0a79345330ce0bbef2fa1b0b30573b2ee0bc0cf0"
+}
