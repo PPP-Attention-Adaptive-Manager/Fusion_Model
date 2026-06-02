@@ -17,7 +17,7 @@ class NotifGRU(BaseModalityModel):
             num_layers  = 1,
             batch_first = True,
         )
-        self.factor_head = nn.Linear(d_proj, 5)
+        self.factor_head = nn.Linear(d_proj, 9)
         self.state_head  = nn.Linear(d_proj, 5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

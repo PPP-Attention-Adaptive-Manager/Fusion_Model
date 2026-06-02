@@ -1,0 +1,22 @@
+{
+    "modality": "notifications",
+    "primary_model": "NotifGRU",
+    "evaluation_method": "LOSO (Leave-One-Subject-Out)",
+    "metrics": {
+        "overall_average_mae": 26.27,
+        "per_user_mae": {
+            "Graja": 31.64,
+            "Makki": 30.18,
+            "amrdroid": 23.9,
+            "dem": 13.13,
+            "gassarra": 38.23,
+            "ghoss": 17.21,
+            "hffz": 22.48,
+            "ignorant": 41.6,
+            "ladabos": 26.73,
+            "layss": 41.2,
+            "mohanned": 8.53,
+            "oussama": 20.36
+        }
+    }
+}
