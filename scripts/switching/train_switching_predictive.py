@@ -32,6 +32,8 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from predictive_models.switching.v1_gru_switching import SwitchingGRU
+from predictive_models.switching.v1_mlp_switching import SwitchingMLP
+from scripts.switching import dual_task_common as dtc
 
 
 STATE_NAMES_5CLASS = ["Flow", "Neutral", "Bored", "Distracted", "Overloaded"]
@@ -361,6 +363,291 @@ def write_csv(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def build_model(model_name: str, *, d_proj: int, hidden_dim: int, num_states: int, device: torch.device):
+    """Construct the switching predictive model (GRU or MLP baseline)."""
+    cls = SwitchingGRU if model_name == "gru" else SwitchingMLP
+    return cls(
+        input_flat_dim=INPUT_FLAT_DIM,
+        d_proj=d_proj,
+        hidden_dim=hidden_dim,
+        num_states=num_states,
+    ).to(device)
+
+
+# --------------------------------------------------------------------------- #
+# Dual-task window-level regression / binary training
+# --------------------------------------------------------------------------- #
+def _dual_task_run_epoch(
+    model: torch.nn.Module,
+    X: np.ndarray,
+    y: np.ndarray,
+    w: np.ndarray,
+    *,
+    device: torch.device,
+    optimizer: torch.optim.Optimizer | None,
+    batch_size: int,
+    huber_delta: float = 0.1,
+    shuffle: bool,
+    seed: int = 0,
+) -> Dict[str, float]:
+    """One epoch of weighted Huber regression on output[:, 0]."""
+    training = optimizer is not None
+    model.train(training)
+    n = X.shape[0]
+    order = np.arange(n)
+    if shuffle:
+        np.random.default_rng(seed).shuffle(order)
+
+    total_loss = 0.0
+    total_w = 0.0
+    abs_err = 0.0
+    count = 0.0
+    for start in range(0, n, batch_size):
+        idx = order[start : start + batch_size]
+        xb = torch.from_numpy(X[idx].astype(np.float32)).to(device)
+        yb = torch.from_numpy(y[idx].astype(np.float32)).to(device)
+        wb = torch.from_numpy(w[idx].astype(np.float32)).to(device)
+        model.reset_microstate()
+        if training:
+            optimizer.zero_grad(set_to_none=True)
+        with torch.set_grad_enabled(training):
+            pred = model(xb)[:, 0]
+            per_sample = F.huber_loss(pred, yb, reduction="none", delta=huber_delta)
+            if torch.isnan(per_sample).any():
+                raise RuntimeError("NaN encountered in dual-task loss (check labels).")
+            loss = (wb * per_sample).sum() / (wb.sum() + 1e-8)
+            if training:
+                loss.backward()
+                optimizer.step()
+        bs = float(len(idx))
+        total_loss += float(loss.detach().item()) * bs
+        total_w += float(wb.sum().item())
+        abs_err += float(torch.abs(pred.detach() - yb).sum().item())
+        count += bs
+    denom = max(count, 1.0)
+    return {"loss": total_loss / denom, "mae": abs_err / denom, "num_samples": denom}
+
+
+def run_dual_task_training(args: argparse.Namespace, device: torch.device) -> None:
+    X, metadata, resolved_dir = dtc.load_switching_slice(args.data_dir)
+    labels = dtc.load_dual_task_labels(args.dual_task_labels, metadata)
+
+    # Safety check: alignment already verified inside load_dual_task_labels.
+    if len(labels) != X.shape[0]:
+        raise ValueError("dual-task labels not aligned with tucker_slices.")
+
+    total_avail = int(labels.available.sum())
+    print(
+        f"[dual-task] {total_avail}/{len(labels)} windows have labels "
+        f"({100.0 * total_avail / max(len(labels), 1):.1f}%); "
+        f"target={args.dual_task_target}, split={args.split_mode}, "
+        f"weighting={args.sample_weighting}, model={args.model}, task={args.task}"
+    )
+
+    folds = dtc.build_folds(
+        labels,
+        split_mode=args.split_mode,
+        seed=args.seed,
+        min_test_labels=args.min_test_labels,
+    )
+    if args.limit_folds is not None:
+        folds = folds[: args.limit_folds]
+    if not folds:
+        raise RuntimeError("No folds could be created (insufficient labelled users).")
+
+    is_binary = args.task == "dual_task_binary"
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    splits_record: List[Dict[str, Any]] = []
+    fold_summaries: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+
+    for fold in folds:
+        fold_id = str(fold["fold_id"])
+        train_idx = fold["train_idx"]
+        val_idx = fold["val_idx"]
+        test_idx = fold["test_idx"]
+
+        # --- safety: enough labelled windows ---
+        if train_idx.size < args.min_train_labels or test_idx.size < args.min_test_labels:
+            reason = (
+                f"train={train_idx.size} (< {args.min_train_labels}) or "
+                f"test={test_idx.size} (< {args.min_test_labels})"
+            )
+            print(f"[skip] fold {fold_id}: too few labels: {reason}")
+            skipped.append({"fold_id": fold_id, "reason": reason,
+                            "train": int(train_idx.size), "test": int(test_idx.size)})
+            continue
+
+        # --- targets (train-only scaling; no leakage) ---
+        target, scaler, baselines = dtc.build_load_targets(
+            labels, target_mode=args.dual_task_target, train_idx=train_idx
+        )
+        y_train = target[train_idx]
+        y_val = target[val_idx]
+        if is_binary:
+            y_train = (y_train > args.binary_threshold).astype(np.float64)
+            y_val = (y_val > args.binary_threshold).astype(np.float64)
+
+        # --- safety: variance checks ---
+        if np.nanstd(target[train_idx]) < 1e-8:
+            reason = "zero target variance in train"
+            print(f"[skip] fold {fold_id}: {reason}")
+            skipped.append({"fold_id": fold_id, "reason": reason,
+                            "train": int(train_idx.size), "test": int(test_idx.size)})
+            continue
+
+        # --- feature normalization (train only) ---
+        mean, std = dtc.fit_feature_norm(X, train_idx)
+        X_train = ((X[train_idx] - mean) / std).astype(np.float32)
+        X_val = ((X[val_idx] - mean) / std).astype(np.float32)
+
+        # --- sample weights ---
+        if args.sample_weighting == "user_balanced":
+            w_train = dtc.user_balanced_weights(labels.users[train_idx])
+        else:
+            w_train = np.ones(train_idx.size, dtype=np.float32)
+        w_val = np.ones(val_idx.size, dtype=np.float32)
+
+        if np.isnan(y_train).any() or np.isnan(y_val).any():
+            raise RuntimeError("NaN target in train/val (masking failed).")
+
+        fold_dir = args.output_dir / f"fold_{fold_id}"
+        fold_dir.mkdir(parents=True, exist_ok=True)
+
+        model = build_model(
+            args.model,
+            d_proj=args.d_proj,
+            hidden_dim=args.hidden_dim,
+            num_states=num_states_for_mode("5class"),
+            device=device,
+        )
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+        best_val = float("inf")
+        best_epoch = -1
+        patience_left = args.patience
+        history: List[Dict[str, Any]] = []
+        checkpoint_path = fold_dir / "best.pt"
+        has_val = val_idx.size > 0 and not np.array_equal(val_idx, train_idx)
+
+        for epoch in range(1, args.epochs + 1):
+            tr = _dual_task_run_epoch(
+                model, X_train, y_train, w_train, device=device, optimizer=optimizer,
+                batch_size=args.batch_size, shuffle=True, seed=args.seed + epoch,
+            )
+            if has_val:
+                vl = _dual_task_run_epoch(
+                    model, X_val, y_val, w_val, device=device, optimizer=None,
+                    batch_size=args.batch_size, shuffle=False,
+                )
+            else:
+                vl = tr  # no separate val set; track train loss for checkpointing
+            history.append({"epoch": epoch,
+                            **{f"train_{k}": v for k, v in tr.items()},
+                            **{f"val_{k}": v for k, v in vl.items()}})
+
+            if vl["loss"] < best_val - 1e-6:
+                best_val = vl["loss"]
+                best_epoch = epoch
+                patience_left = args.patience
+                torch.save(
+                    {
+                        "model_state_dict": model.state_dict(),
+                        "model_name": args.model,
+                        "x_mean": mean,
+                        "x_std": std,
+                        "fold_id": fold_id,
+                        "split_mode": args.split_mode,
+                        "task": args.task,
+                        "dual_task_target": args.dual_task_target,
+                        "binary_threshold": args.binary_threshold,
+                        "rt_scaler": scaler.to_dict(),
+                        "user_baselines": baselines,
+                        "input_flat_dim": INPUT_FLAT_DIM,
+                        "d_proj": args.d_proj,
+                        "hidden_dim": args.hidden_dim,
+                        "epoch": epoch,
+                        "val_loss": best_val,
+                        "test_user": fold.get("test_user"),
+                        "train_users": [str(u) for u in fold.get("train_users", [])],
+                        "val_users": [str(u) for u in fold.get("val_users", [])],
+                        "train_sessions": fold.get("train_sessions"),
+                        "val_sessions": fold.get("val_sessions"),
+                        "test_sessions": fold.get("test_sessions"),
+                        "data_dir": str(resolved_dir),
+                    },
+                    checkpoint_path,
+                )
+            else:
+                patience_left -= 1
+                if patience_left <= 0:
+                    break
+
+        write_csv(fold_dir / "loss_history.csv", history)
+        summary = {
+            "fold_id": fold_id,
+            "split_mode": args.split_mode,
+            "best_epoch": best_epoch,
+            "best_val_loss": best_val,
+            "train_labels": int(train_idx.size),
+            "val_labels": int(val_idx.size),
+            "test_labels": int(test_idx.size),
+            "checkpoint": str(checkpoint_path),
+            "rt_scaler": scaler.to_dict(),
+        }
+        fold_summaries.append(summary)
+        print(json.dumps(summary, sort_keys=True))
+
+        splits_record.append(
+            {
+                "fold_id": fold_id,
+                "split_mode": args.split_mode,
+                "test_user": fold.get("test_user"),
+                "train_users": [str(u) for u in fold.get("train_users", [])],
+                "val_users": [str(u) for u in fold.get("val_users", [])],
+                "train_sessions": fold.get("train_sessions"),
+                "val_sessions": fold.get("val_sessions"),
+                "test_sessions": fold.get("test_sessions"),
+                "train_idx": train_idx.tolist(),
+                "val_idx": val_idx.tolist(),
+                "test_idx": test_idx.tolist(),
+            }
+        )
+
+    (args.output_dir / "splits.json").write_text(
+        json.dumps(splits_record, indent=2), encoding="utf-8"
+    )
+    train_config = {
+        "data_dir": str(resolved_dir),
+        "dual_task_labels": str(args.dual_task_labels),
+        "task": args.task,
+        "model": args.model,
+        "dual_task_target": args.dual_task_target,
+        "sample_weighting": args.sample_weighting,
+        "split_mode": args.split_mode,
+        "binary_threshold": args.binary_threshold,
+        "min_test_labels": args.min_test_labels,
+        "min_train_labels": args.min_train_labels,
+        "epochs": args.epochs,
+        "batch_size": args.batch_size,
+        "lr": args.lr,
+        "weight_decay": args.weight_decay,
+        "d_proj": args.d_proj,
+        "hidden_dim": args.hidden_dim,
+        "seed": args.seed,
+        "device": str(device),
+        "total_available_windows": total_avail,
+        "num_folds": len(fold_summaries),
+        "skipped_folds": skipped,
+        "folds": fold_summaries,
+    }
+    (args.output_dir / "train_config.json").write_text(
+        json.dumps(train_config, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    print(json.dumps(train_config, indent=2, sort_keys=True))
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train switching predictive model with LOSO CV.")
     parser.add_argument("--data-dir", type=Path, default=Path("data_for_training"))
@@ -381,9 +668,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--focal-gamma", type=float, default=2.0)
     parser.add_argument(
         "--task",
-        choices=["joint", "regression_only", "classification_only"],
+        choices=[
+            "joint",
+            "regression_only",
+            "classification_only",
+            # NASA aliases / explicit names
+            "nasa_joint",
+            "nasa_regression",
+            # dual-task window-level supervision
+            "dual_task_regression",
+            "dual_task_binary",
+        ],
         default="joint",
     )
+    # --- dual-task window-level supervision options ---
+    parser.add_argument("--model", choices=["gru", "mlp"], default="gru")
+    parser.add_argument(
+        "--dual-task-labels",
+        type=Path,
+        default=Path("data_training/dual_task_window_labels.csv"),
+    )
+    parser.add_argument(
+        "--dual-task-target", choices=["relative", "absolute"], default="relative"
+    )
+    parser.add_argument(
+        "--sample-weighting", choices=["none", "user_balanced"], default="user_balanced"
+    )
+    parser.add_argument(
+        "--split-mode", choices=["loso", "session_within_user"], default="loso"
+    )
+    parser.add_argument("--binary-threshold", type=float, default=0.5)
+    parser.add_argument("--min-test-labels", type=int, default=1)
+    parser.add_argument("--min-train-labels", type=int, default=8)
     return parser.parse_args()
 
 
@@ -392,6 +708,17 @@ def main() -> None:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device(args.device if args.device != "cuda" or torch.cuda.is_available() else "cpu")
+
+    # Route dual-task window-level supervision to its own pipeline.
+    if args.task in ("dual_task_regression", "dual_task_binary"):
+        run_dual_task_training(args, device)
+        return
+
+    # NASA aliases map onto the original task names.
+    if args.task == "nasa_joint":
+        args.task = "joint"
+    elif args.task == "nasa_regression":
+        args.task = "regression_only"
 
     X, labels, metadata, resolved_dir = load_training_arrays(args.data_dir)
     factors, states = prepare_targets(labels, state_mode=args.state_mode)
