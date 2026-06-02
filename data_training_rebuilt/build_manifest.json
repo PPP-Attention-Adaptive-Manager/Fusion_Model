@@ -1,0 +1,41 @@
+{
+  "generated_from": "data",
+  "window_size": "120s",
+  "primary_modality": "switching",
+  "n_windows": 806,
+  "n_sessions": 54,
+  "eligible_sessions": 54,
+  "tucker_shape": [
+    806,
+    4,
+    512
+  ],
+  "nasa_shape": [
+    806,
+    9
+  ],
+  "switching_embeddings_shape": [
+    806,
+    64
+  ],
+  "d_dims": [
+    64,
+    64,
+    32,
+    64
+  ],
+  "tucker_rank": 8,
+  "switching_slice_method": "direct_seeded_projection_64x512_then_tanh",
+  "switching_projection_seed": 1234,
+  "mouse_keyboard_status": "zero_fallback_no_embedder_weights",
+  "notif_status": "onnx",
+  "fallback_counts": {
+    "mouse": 806,
+    "keyboard": 806,
+    "notif": 0
+  },
+  "skipped_sessions": [],
+  "device_user_map_provided": false,
+  "timestamp_logic": "unchanged_direct_unix_seconds",
+  "note": "tucker slots 0-2 use current Tucker; with zero mouse/keyboard they remain ~0. Slot 3 (switching) built directly from real GraphSAGE embedding."
+}

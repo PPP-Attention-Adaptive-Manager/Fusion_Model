@@ -1,0 +1,9 @@
+{
+  "encoder_class": "MouseEncoderP2",
+  "stats_dim": 22,
+  "tcn_out_dim": 64,
+  "click_dim": 32,
+  "mlp_hidden": 64,
+  "fusion_dim": 64,
+  "embedding_dim": 64
+}

@@ -1,0 +1,10 @@
+{
+  "input_size": 3,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "bidirectional": false,
+  "dropout": 0.2,
+  "window_size": 20,
+  "stride": 10,
+  "embedding_dim": 64
+}
