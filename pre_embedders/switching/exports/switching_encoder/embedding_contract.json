@@ -1,0 +1,10 @@
+{
+  "module": "switching",
+  "encoder": "GraphSAGE_GAE",
+  "embedding_dim": 64,
+  "window_size_s": 120,
+  "dtype": "float32",
+  "normalization": "l2",
+  "update_frequency_s": 120,
+  "decoder_used_at_inference": false
+}

@@ -22,7 +22,7 @@ Output contract
 }
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 
@@ -32,19 +32,24 @@ from ema.ema            import EMAsmoother, compute_uncertainty
 from predictive_models  import MODALITY_MODELS
 
 
+DEFAULT_D_DIMS = [64, 64, 32, 64]
+
+
 class InferrerFusion(nn.Module):
 
     MODALITY_NAMES = ["mouse", "keyboard", "notif", "switching"]
 
     def __init__(
         self,
-        d_dims    : List[int] = [64, 64, 32, 32],
+        d_dims    : Optional[List[int]] = None,
         rank      : int   = 8,
         d_proj    : int   = 256,
         poe_mode  : str   = "vanilla",
         ema_alpha : float = 0.7,
     ):
         super().__init__()
+        if d_dims is None:
+            d_dims = DEFAULT_D_DIMS.copy()
         assert len(d_dims) == 4
 
         self.d_dims = d_dims

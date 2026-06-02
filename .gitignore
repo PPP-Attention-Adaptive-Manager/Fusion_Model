@@ -8,3 +8,5 @@ build/
 .env
 venv/
 pre_embedders/notif/data/
+data/
+outputs/

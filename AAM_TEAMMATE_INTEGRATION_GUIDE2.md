@@ -32,7 +32,7 @@ The fusion model runs at **1Hz** — one forward pass per second. Every componen
 ## 2. Locked Dimensions — Do Not Change These
 
 ```python
-# Embedding dimensions entering TFN (output of each encoder)
+# Embedding dimensions entering TFN (output of each BufferedEncoder)
 d_dims = [64, 64, 32, 64]
 #        mouse  kb  notif  switching
 
@@ -43,7 +43,7 @@ R = 8
 input_flat_dim = R ** 3   # = 512 for all 4 modalities
 ```
 
-These numbers are set in `fusion_model.py`. Switching is 64D by default because the trained GraphSAGE-GAE encoder already outputs a learned 64D graph embedding.
+These numbers are set in `fusion_model.py`. If your embedder outputs a different dimension, the fix goes in **your `BufferedEncoder`** (add a projection layer there), not in the fusion model.
 
 ---
 
@@ -247,54 +247,27 @@ The encoder parses the dict, extracts `[embedding(16), npi, burstiness, disrupti
 
 ### 4.5 Switching/GNN embedder integration
 
-**Your output:** dict from the encoder-only GraphSAGE-GAE export every 120 seconds.
-The default switching path is identity-only: it preserves the learned 64D embedding and only handles cold start plus freshness/staleness.
-
+**Your output:** dict from behavioral graph module every 120 seconds  
 **Required fields:**
 
 ```python
 {
-    "embedding": np.array shape (64,) dtype float32,
-    "metadata": {
-        "module": "switching",
-        "encoder": "GraphSAGE_GAE",
-        "embedding_dim": 64,
-        "window_size_s": 120,
-        "normalized": "l2",
-        "cold_start": bool,
-        "decoder_used_at_inference": False,
+    "embedding":     np.array shape (64,) dtype float32,
+    "graph_metrics": {
+        "num_nodes":       int,
+        "num_edges":       int,
+        "density":         float,
+        "switch_rate":     float,
+        "fragmentation":   float,
+        "focus_ratio":     float,
+        "multitask_score": float,
     }
+    # "state" is IGNORED
+    # "metadata" is IGNORED
 }
 ```
 
 **How to push:** same pattern as notif, but fires every 120s. The encoder holds the last known embedding for up to 120s — staleness decays the contribution via `exp(-staleness/60)`.
-
----
-
-Current identity-only usage:
-
-```python
-from pre_embedders.switching import load_model
-from TCN_encoders.switching.encoder import SwitchingBufferedEncoder
-
-switching_session = load_model(device="auto")
-switching_enc = SwitchingBufferedEncoder()  # default: identity
-
-payload = switching_session.get_fusion_input(graph_json_or_path)
-emb, fresh = switching_enc.step(payload)    # emb shape: (1, 64)
-```
-
-If no new graph arrives, call `switching_enc.step(None)`. It returns the last valid embedding with freshness `exp(-staleness/60)`. If no previous embedding exists, it returns zeros `(1,64)` with freshness `0.0`.
-
-The old random-frozen TCN path is still available only for ablation:
-
-```python
-from TCN_encoders.switching.encoder import SwitchingRandomFrozenTCNEncoder
-
-switching_enc = SwitchingRandomFrozenTCNEncoder()  # output shape: (1, 32)
-```
-
-or set `SWITCHING_ENCODER_MODE=random_frozen_tcn`.
 
 ---
 
@@ -453,7 +426,7 @@ cd fusion_model/
 python test_fusion.py
 ```
 
-The smoke tests must pass. If they do, your model is correctly integrated.
+All 6 tests must pass. If they do, your model is correctly integrated.
 
 ---
 
@@ -668,7 +641,7 @@ It does not replace or modify the main predictive model. It is an additional tra
 □ Dims 10–11 computed via compute_uncertainty() from ema.ema
 □ reset_microstate() clears all hidden state (GRU/LSTM h, c)
 □ __init__.py in your modality folder updated to point at your model
-□ test_fusion.py passes
+□ test_fusion.py passes all 6 tests
 □ Smoke tested with d_dims=[64, 64, 32, 64], rank=8
 ```
 
