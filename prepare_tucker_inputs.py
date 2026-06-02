@@ -292,7 +292,14 @@ def extract_keyboard_embeddings(session_path, windows):
     except Exception:
         return [None] * len(windows)
 
-    encoder = KeystrokeEncoder(hidden_size=64, num_layers=2).eval()
+    encoder = KeystrokeEncoder(hidden_size=64, num_layers=2)
+    _weights = Path(__file__).resolve().parent / "pre_embedders" / "keyboard" / "weights" / "kb_encoder_lstm.pt"
+    if _weights.exists():
+        encoder.load_state_dict(torch.load(_weights, map_location="cpu"))
+        log.info("Keyboard encoder: loaded trained weights from %s", _weights)
+    else:
+        log.warning("Keyboard encoder: weights not found at %s — using random init", _weights)
+    encoder.eval()
     results = []
     for (start, end) in windows:
         win_rows = [r for r in all_rows if start <= float(r["timestamp"]) < end]

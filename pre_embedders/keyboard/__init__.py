@@ -21,6 +21,10 @@ Output contract (fusion-facing)
     shape  : (64,)  np.float32
     push   : fusion_input.keyboard_queue.put(embedding)
     cadence: one vector per S=10 completed keystrokes (~2–3 s at average typing speed)
+
+    weights : pre_embedders/keyboard/weights/kb_encoder_lstm.pt
+              pre_embedders/keyboard/weights/kb_encoder_bilstm.pt
+
 """
 
 from .encoder  import KeystrokeEncoder, build_lstm_encoder, build_bilstm_encoder

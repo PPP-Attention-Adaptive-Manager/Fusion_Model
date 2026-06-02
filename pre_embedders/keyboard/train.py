@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
+from pathlib import Path
 
 from .encoder import KeystrokeEncoder
 from .dataset import KeystrokeWindowDataset, collate_windows
@@ -160,6 +161,15 @@ def train(
         )
 
     model.eval().cpu()
+
+    weights_dir = Path(__file__).parent / "weights"
+    weights_dir.mkdir(exist_ok=True)
+
+    variant = "bilstm" if bidirectional else "lstm"
+    save_path = weights_dir / f"kb_encoder_{variant}.pt"
+    torch.save(model.state_dict(), save_path)
+    print(f"Weights saved → {save_path}")
+
     return model
 
 
