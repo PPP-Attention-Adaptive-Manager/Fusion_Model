@@ -41,6 +41,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from sklearn.metrics import (
     f1_score, matthews_corrcoef, cohen_kappa_score, confusion_matrix,
 )
+from sklearn.utils.class_weight import compute_class_weight
 warnings.filterwarnings("ignore")
 
 # ── paths ────────────────────────────────────────────────────────────────────
@@ -115,6 +116,60 @@ def prepare_labels(nasa_tlx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return factors, states
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Temporal label generation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_temporal_labels(
+    nasa_tlx_final: np.ndarray,
+    T:              int,
+    v_initial:      float = 50.0,
+) -> np.ndarray:
+    """
+    Generate a (T, 9) sequence of NASA-TLX values that evolves from
+    v_initial=50 toward nasa_tlx_final using exponential decay:
+
+        V_i(t) = V_i,final + (V_i,initial - V_i,final) × e^(-λ × t)
+
+    λ is chosen so that at t=T the curve has covered 95% of the distance:
+        e^(-λ × T) = 0.05  →  λ = ln(20) / T
+
+    Windows indexed t = 1 … T (first window is NOT the initial value;
+    last window is 95% of the way to V_final, not exactly at it).
+    """
+    v_final = nasa_tlx_final.astype(np.float32)
+    lam     = np.log(20.0) / max(T, 1)
+    t_idx   = np.arange(1, T + 1, dtype=np.float32)           # (T,)
+    decay   = np.exp(-lam * t_idx)[:, np.newaxis]              # (T, 1)
+    seq     = v_final + (v_initial - v_final) * decay          # (T, 9)
+    return np.clip(seq, 0.0, 100.0).astype(np.float32)
+
+
+def prepare_temporal_labels(
+    nasa_tlx_final: np.ndarray,
+    T:              int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Returns per-window targets derived from the temporal decay sequence.
+
+    Returns:
+        factors_seq: (T, 5) float32 — [MD, TD, EF, FR, AR] normalised [0,1]
+        states_seq:  (T,)   int64   — state label per window
+    """
+    seq = generate_temporal_labels(nasa_tlx_final, T)          # (T, 9)
+    factors_seq = np.column_stack([
+        seq[:, 0],
+        seq[:, 2],
+        seq[:, 4],
+        seq[:, 5],
+        (seq[:, 2] + seq[:, 4]) / 2,
+    ]).astype(np.float32) / 100.0                               # (T, 5)
+    states_seq = np.array(
+        [derive_state_label(row) for row in seq], dtype=np.int64
+    )                                                           # (T,)
+    return factors_seq, states_seq
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Loss
 # ═════════════════════════════════════════════════════════════════════════════
@@ -123,9 +178,11 @@ def compute_loss(
     output:     torch.Tensor,   # (B, 12)
     factors_gt: torch.Tensor,   # (B, 5) normalized [0,1]
     states_gt:  torch.Tensor,   # (B,)   int64
+    class_weights: torch.Tensor = None,
 ) -> torch.Tensor:
     factor_loss = F.huber_loss(output[:, :5], factors_gt)
-    state_loss  = F.cross_entropy(output[:, 5:10], states_gt)
+    state_loss  = F.cross_entropy(output[:, 5:10], states_gt,
+                                  weight=class_weights)
     return 0.4 * factor_loss + 0.6 * state_loss
 
 
@@ -172,6 +229,16 @@ def load_sequences(sequences_path: Path) -> list[dict]:
     users = sorted(set(s["user_id"] for s in seqs))
     print(f"Users: {users}")
     print(f"Total windows: {sum(s['T'] for s in seqs)}")
+
+    # show temporal label distribution (what the model actually trains on)
+    all_temp_states = []
+    for s in seqs:
+        _, states_seq = prepare_temporal_labels(s["y"], s["T"])
+        all_temp_states.extend(states_seq.tolist())
+    print("\nTemporal state distribution (window-level, after decay):")
+    for i, name in enumerate(STATE_NAMES):
+        c = all_temp_states.count(i)
+        print(f"  {name:<12} {c:4d}  ({100*c/len(all_temp_states):.1f}%)")
     return seqs
 
 
@@ -248,31 +315,31 @@ def train_rf_loso(seqs: list[dict], output_dir: Path) -> dict:
 # PyTorch model — LOSO training loop
 # ═════════════════════════════════════════════════════════════════════════════
 
-def train_one_epoch(model, seqs, optimizer):
+def train_one_epoch(model, seqs, optimizer, class_weights=None):
     model.train()
     total_loss = 0.0
     n_windows  = 0
 
     for s in seqs:
         X = torch.tensor(s["X"][:, MODALITY_IDX, :], dtype=torch.float32).to(DEVICE)
-        factors, state = prepare_labels(s["y"])
         T = s["T"]
 
-        y_f = torch.tensor(np.tile(factors, (T, 1)), dtype=torch.float32).to(DEVICE)
-        y_s = torch.tensor([state] * T, dtype=torch.long).to(DEVICE)
+        # per-window temporal targets (vary across session, not broadcast)
+        y_f_np, y_s_np = prepare_temporal_labels(s["y"], T)
+        y_f = torch.tensor(y_f_np, dtype=torch.float32).to(DEVICE)
+        y_s = torch.tensor(y_s_np, dtype=torch.long).to(DEVICE)
 
         model.reset_microstate()
 
         for t in range(T):
-            x_t   = X[t].unsqueeze(0)   # (1, 512)
-            out   = model(x_t)           # (1, 12)
-            loss  = compute_loss(out, y_f[t].unsqueeze(0), y_s[t].unsqueeze(0))
-
+            x_t   = X[t].unsqueeze(0)
+            out   = model(x_t)
+            loss  = compute_loss(out, y_f[t].unsqueeze(0), y_s[t].unsqueeze(0),
+                                 class_weights)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-
             total_loss += loss.item()
             n_windows  += 1
 
@@ -280,7 +347,7 @@ def train_one_epoch(model, seqs, optimizer):
 
 
 @torch.no_grad()
-def evaluate_torch(model, seqs) -> tuple[list, list, float]:
+def evaluate_torch(model, seqs, class_weights=None) -> tuple[list, list, float]:
     model.eval()
     all_true, all_pred = [], []
     total_loss = 0.0
@@ -288,21 +355,21 @@ def evaluate_torch(model, seqs) -> tuple[list, list, float]:
 
     for s in seqs:
         X = torch.tensor(s["X"][:, MODALITY_IDX, :], dtype=torch.float32).to(DEVICE)
-        factors, state = prepare_labels(s["y"])
         T = s["T"]
 
-        y_f = torch.tensor(np.tile(factors, (T, 1)), dtype=torch.float32).to(DEVICE)
-        y_s = torch.tensor([state] * T, dtype=torch.long).to(DEVICE)
+        y_f_np, y_s_np = prepare_temporal_labels(s["y"], T)
+        y_f = torch.tensor(y_f_np, dtype=torch.float32).to(DEVICE)
+        y_s = torch.tensor(y_s_np, dtype=torch.long).to(DEVICE)
 
         model.reset_microstate()
 
         for t in range(T):
             x_t  = X[t].unsqueeze(0)
             out  = model(x_t)
-            loss = compute_loss(out, y_f[t].unsqueeze(0), y_s[t].unsqueeze(0))
-
+            loss = compute_loss(out, y_f[t].unsqueeze(0), y_s[t].unsqueeze(0),
+                                class_weights)
             pred = int(out[0, 5:10].argmax().item())
-            all_true.append(state)
+            all_true.append(int(y_s_np[t]))
             all_pred.append(pred)
             total_loss += loss.item()
             n_windows  += 1
@@ -326,6 +393,21 @@ def train_torch_loso(
     unique_users = sorted(set(s["user_id"] for s in seqs))
     all_true, all_pred = [], []
 
+    # window-level class weights from temporal labels — correct granularity
+    all_states_window = []
+    for s in seqs:
+        _, states_seq = prepare_temporal_labels(s["y"], s["T"])
+        all_states_window.extend(states_seq.tolist())
+    all_states_window = np.array(all_states_window)
+    weights = compute_class_weight("balanced",
+                                   classes=np.unique(all_states_window),
+                                   y=all_states_window)
+    cw = np.ones(5, dtype=np.float32)
+    for i, cls in enumerate(np.unique(all_states_window)):
+        cw[int(cls)] = weights[i]
+    class_weights = torch.tensor(cw, dtype=torch.float32).to(DEVICE)
+    print(f"  Class weights (temporal window-level): {dict(zip(STATE_NAMES, cw.round(2).tolist()))}")
+
     for test_user in unique_users:
         train_seqs = [s for s in seqs if s["user_id"] != test_user]
         test_seqs  = [s for s in seqs if s["user_id"] == test_user]
@@ -339,8 +421,8 @@ def train_torch_loso(
         best_weights = None
 
         for epoch in range(epochs):
-            train_loss = train_one_epoch(model, train_seqs, optimizer)
-            true, pred, val_loss = evaluate_torch(model, test_seqs)
+            train_loss = train_one_epoch(model, train_seqs, optimizer, class_weights)
+            true, pred, val_loss = evaluate_torch(model, test_seqs, class_weights)
             epoch_f1 = f1_score(true, pred, average="macro", zero_division=0)
             scheduler.step(val_loss)
 
@@ -355,7 +437,7 @@ def train_torch_loso(
 
         # evaluate with best weights on test user
         model.load_state_dict(best_weights)
-        true, pred, _ = evaluate_torch(model, test_seqs)
+        true, pred, _ = evaluate_torch(model, test_seqs, class_weights)
         all_true.extend(true)
         all_pred.extend(pred)
         fold_f1 = f1_score(true, pred, average="macro", zero_division=0)
@@ -370,7 +452,7 @@ def train_torch_loso(
 
     print(f"\n  Retraining {model_name} on full dataset...")
     for epoch in range(epochs):
-        loss = train_one_epoch(model_final, seqs, optimizer)
+        loss = train_one_epoch(model_final, seqs, optimizer, class_weights)
         if (epoch + 1) % 10 == 0:
             print(f"    epoch {epoch+1:3d}  loss={loss:.4f}")
 

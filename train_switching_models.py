@@ -236,17 +236,22 @@ def train_loso(
     print(f"{model_name} — LOSO")
     print(f"{'='*52}")
 
-    all_states = np.array([derive_state_label(s["y"]) for s in seqs])
-    weights    = compute_class_weight(
+    # window-level class weights — correct granularity for the training loop
+    all_states_window = []
+    for s in seqs:
+        _, state = prepare_labels(s["y"])
+        all_states_window.extend([state] * s["T"])
+    all_states_window = np.array(all_states_window)
+    weights = compute_class_weight(
         "balanced",
-        classes=np.unique(all_states),
-        y=all_states,
+        classes=np.unique(all_states_window),
+        y=all_states_window,
     )
     cw = np.ones(5, dtype=np.float32)
-    for i, cls in enumerate(np.unique(all_states)):
+    for i, cls in enumerate(np.unique(all_states_window)):
         cw[int(cls)] = weights[i]
     class_weights = torch.tensor(cw, dtype=torch.float32).to(DEVICE)
-    print(f"  Class weights: {dict(zip(STATE_NAMES, cw.round(2).tolist()))}")
+    print(f"  Class weights (window-level): {dict(zip(STATE_NAMES, cw.round(2).tolist()))}")
 
     unique_users        = sorted(set(s["user_id"] for s in seqs))
     all_true, all_pred  = [], []
